@@ -100,10 +100,12 @@ Returns one of:
 that wires a Voice Preview / Assist satellite device to this service — no
 hand-edited YAML needed on the Home Assistant side.
 
-**Import it**: Settings → Automations & Scenes → Blueprints → Import Blueprint,
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fcantolick%2Fha-rapidfuzz-ma%2Fmain%2Fblueprints%2Faudiobook_voice_handler.yaml)
+
+Or manually: Settings → Automations & Scenes → Blueprints → Import Blueprint,
 paste:
 ```
-https://github.com/cantolick/ha-rapidfuzz-ma/blob/main/blueprints/audiobook_voice_handler.yaml
+https://raw.githubusercontent.com/cantolick/ha-rapidfuzz-ma/main/blueprints/audiobook_voice_handler.yaml
 ```
 
 **Prerequisite**: three `rest_command` services need to already exist in your
