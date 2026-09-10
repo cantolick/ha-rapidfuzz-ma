@@ -21,12 +21,18 @@ from rapidfuzz import fuzz, process
 import ma_client
 from catalog import SERIES_DEFAULT_TITLE, build_catalog
 
-# playlist name -> list of MA library playlist item_ids to union. "teens"
-# inherits everything in "kids" automatically — no hand-duplicating entries.
-PLAYLIST_SOURCES = {
-    "kids": ["10"],
-    "teens": ["10", "11"],
-}
+# playlist name -> list of MA library playlist item_ids to union (e.g. a
+# "teens" playlist that should also include everything in "kids", so new
+# kids content doesn't need to be hand-duplicated into teens). Configured via
+# env var, not hardcoded — a prebuilt/pulled image has to be configurable
+# without a rebuild. See .env.example for the expected JSON shape.
+try:
+    PLAYLIST_SOURCES: dict = json.loads(os.environ.get("PLAYLIST_SOURCES_JSON", "{}"))
+except json.JSONDecodeError as e:
+    print(f"WARNING: PLAYLIST_SOURCES_JSON is not valid JSON ({e}) — no named "
+          f"playlists configured; only the full-library (no-playlist) catalog will work.")
+    PLAYLIST_SOURCES = {}
+
 FULL_LIBRARY_KEY = "__all__"  # used instead of None so the cache file (plain
 # JSON, string keys only) round-trips without special-casing
 

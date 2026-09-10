@@ -3,9 +3,8 @@
 # Home Assistant / Music Assistant, rather than running this as a separate
 # stack — keeps everything on one network, one `docker compose up`.
 #
-# Needs a .env file alongside this one with:
-#   MA_URL=http://<your-nas-ip-or-hostname>:8095
-#   MA_TOKEN=<the MA llmassist long-lived token>
+# Needs a .env file alongside this one — see .env.example for the full
+# format (MA_URL, MA_TOKEN, PLAYLIST_SOURCES_JSON).
 services:
   audiobook-matcher:
     build: .
@@ -16,6 +15,7 @@ services:
     environment:
       MA_URL: ${MA_URL}
       MA_TOKEN: ${MA_TOKEN}
+      PLAYLIST_SOURCES_JSON: ${PLAYLIST_SOURCES_JSON}
     volumes:
       # Persists the last successfully-fetched catalog across container
       # restarts/recreates, so a container coming up before Music Assistant

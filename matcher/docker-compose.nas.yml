@@ -1,7 +1,7 @@
 # For the NAS: pulls the pre-built image from GitHub Container Registry
 # instead of building from source (docker-compose.yml does that, for local
 # dev). No source files needed on the NAS at all — just this file and a
-# .env with MA_URL / MA_TOKEN.
+# .env (see .env.example for the full format).
 #
 #   docker compose -f docker-compose.nas.yml up -d
 #
@@ -18,6 +18,7 @@ services:
     environment:
       MA_URL: ${MA_URL}
       MA_TOKEN: ${MA_TOKEN}
+      PLAYLIST_SOURCES_JSON: ${PLAYLIST_SOURCES_JSON}
     volumes:
       - audiobook-matcher-cache:/data
 

@@ -54,20 +54,25 @@ curl -X POST http://localhost:8010/match \
 
 ## Configuration
 
-| Playlist key | Meaning |
-|---|---|
-| `kids` | Music Assistant playlist(s) mapped to this name |
-| `teens` | Composed from multiple playlists (e.g. `kids` ∪ `teens`) — no need to duplicate entries by hand |
-| *(omitted)* | Searches the full library instead of any curated playlist |
-
-Edit `PLAYLIST_SOURCES` in `matcher/app.py` to match your own Music Assistant
-playlist IDs.
+All configuration is environment variables — nothing to edit in the source,
+including for a pulled prebuilt image (see `.env.example`):
 
 | Env var | Purpose |
 |---|---|
 | `MA_URL` | Base URL of your Music Assistant server |
 | `MA_TOKEN` | A Music Assistant long-lived API token |
+| `PLAYLIST_SOURCES_JSON` | JSON object mapping a playlist name to the MA playlist item_id(s) it's built from |
 | `CACHE_PATH` | Where the last-successful catalog is cached (default `/data/catalog_cache.json`) |
+
+`PLAYLIST_SOURCES_JSON` example:
+```json
+{"kids": ["10"], "teens": ["10", "11"]}
+```
+A name can list more than one playlist id to compose them together — `teens`
+above includes everything in playlist `10` *and* playlist `11`, so a book
+curated into `kids` doesn't need to be hand-duplicated into `teens` too.
+Omitting `playlist` in a request searches the full Music Assistant library
+instead of any named playlist.
 
 If Music Assistant is unreachable at startup (a real scenario — MA and this
 service can race to come up after a reboot), the service retries a few times,
