@@ -1,0 +1,27 @@
+# Standalone compose file for local testing. On the NAS, merge the
+# `audiobook-matcher` service block into whatever compose file already runs
+# Home Assistant / Music Assistant, rather than running this as a separate
+# stack — keeps everything on one network, one `docker compose up`.
+#
+# Needs a .env file alongside this one with:
+#   MA_URL=http://<your-nas-ip-or-hostname>:8095
+#   MA_TOKEN=<the MA llmassist long-lived token>
+services:
+  audiobook-matcher:
+    build: .
+    container_name: audiobook-matcher
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
+    environment:
+      MA_URL: ${MA_URL}
+      MA_TOKEN: ${MA_TOKEN}
+    volumes:
+      # Persists the last successfully-fetched catalog across container
+      # restarts/recreates, so a container coming up before Music Assistant
+      # (or during a transient MA outage) degrades to "serving yesterday's
+      # playlist" instead of crashing or serving nothing.
+      - audiobook-matcher-cache:/data
+
+volumes:
+  audiobook-matcher-cache:

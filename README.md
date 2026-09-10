@@ -1,0 +1,94 @@
+# Audiobook Matcher for Home Assistant + Music Assistant
+
+A small local service that lets a kid ask a [Home Assistant Voice Preview](https://www.home-assistant.io/voice-pe/)
+device for an audiobook by name — "play the wimpy kid book," "play harry potter
+book 2," "play percy jackson" — and have it actually find and play the right
+title from a [Music Assistant](https://www.music-assistant.io/) library, even
+when the phrase doesn't exactly match the catalog text.
+
+It started as a Cloudflare Worker calling an LLM to do the matching. It's now a
+self-contained fuzzy-matching microservice — no LLM, no cloud dependency, sub-
+millisecond matching, and it runs entirely on your own network. [Read the full
+story of that pivot and why](https://claude.ai/code/artifact/28beb3fd-6226-4218-8fc8-be45264b689c).
+
+## How it works
+
+```
+Voice Preview → HA script → this service → Music Assistant → speaker
+```
+
+1. Home Assistant sends `{ utterance, playlist, mode }` to this service.
+2. The service fetches and caches Music Assistant playlists **itself**, at
+   startup — Home Assistant never needs to pass a book list at all.
+3. `rapidfuzz` matches the utterance against the cached catalog. Series names
+   ("harry potter"), explicit book numbers ("book 2," "the second one"), and
+   character/series aliases that don't literally appear in a title ("narnia" →
+   *The Lion, the Witch, and the Wardrobe*) are all handled without an LLM.
+4. A confident single match plays directly. A handful of close candidates come
+   back as a short disambiguation list instead of a guess. Nothing close enough
+   returns a clean no-match — declining beats confidently playing the wrong book.
+
+## Quick start
+
+```bash
+cd matcher
+cp .env.example .env   # fill in your Music Assistant URL + token
+docker compose up -d --build
+```
+
+```bash
+curl -X POST http://localhost:8010/match \
+  -H "Content-Type: application/json" \
+  -d '{"utterance": "play the wimpy kid book", "playlist": "kids", "mode": "search"}'
+```
+
+## Configuration
+
+| Playlist key | Meaning |
+|---|---|
+| `kids` | Music Assistant playlist(s) mapped to this name |
+| `teens` | Composed from multiple playlists (e.g. `kids` ∪ `teens`) — no need to duplicate entries by hand |
+| *(omitted)* | Searches the full library instead of any curated playlist |
+
+Edit `PLAYLIST_SOURCES` in `matcher/app.py` to match your own Music Assistant
+playlist IDs.
+
+| Env var | Purpose |
+|---|---|
+| `MA_URL` | Base URL of your Music Assistant server |
+| `MA_TOKEN` | A Music Assistant long-lived API token |
+| `CACHE_PATH` | Where the last-successful catalog is cached (default `/data/catalog_cache.json`) |
+
+If Music Assistant is unreachable at startup (a real scenario — MA and this
+service can race to come up after a reboot), the service retries a few times,
+then falls back to the last cached catalog rather than crashing or serving
+nothing. `/health` reports `"stale": true` when it's running on that cache
+instead of a fresh fetch. `POST /refresh` re-fetches on demand.
+
+## API
+
+**`POST /match`**
+```json
+{ "utterance": "play harry potter book 2", "playlist": "kids", "mode": "search" }
+```
+Returns one of:
+- `{ "uri": "...", "title": "...", "confidence": "high" | "medium" }` — a match
+- `{ "disambiguation": [{ "title": "...", "uri": "..." }, ...] }` — ask the user which one
+- `{ "error": "no_match" }`
+- `{ "response": "..." }` — for `"mode": "list"`, a spoken summary instead of a match
+
+**`GET /health`** / **`POST /refresh`** — see Configuration above.
+
+## Project layout
+
+```
+matcher/
+  app.py           # FastAPI service, matching logic
+  catalog.py        # title normalization, series/alias data
+  ma_client.py      # minimal Music Assistant API client
+  Dockerfile
+  docker-compose.yml
+```
+
+Home Assistant automations/scripts and any environment-specific config live
+outside this public repo.

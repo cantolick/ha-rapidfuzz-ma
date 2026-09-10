@@ -1,0 +1,8 @@
+# Personal Home Assistant config — kids' names, device IDs, network details.
+# Kept locally for actual deployment, never tracked.
+ha/
+
+matcher/.env
+matcher/venv/
+matcher/__pycache__/
+.wrangler/
