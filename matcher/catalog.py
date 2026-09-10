@@ -68,6 +68,47 @@ def clean_title(raw: str) -> str:
     return UNABRIDGED_RE.sub("", raw).strip()
 
 
+def _named_values(value: object) -> list[str]:
+    """Extract names from MA's string or entity-list metadata shapes."""
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if not isinstance(value, list):
+        return []
+
+    names = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            names.append(item.strip())
+        elif isinstance(item, dict) and isinstance(item.get("name"), str):
+            name = item["name"].strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def _metadata_aliases(book: dict) -> dict[str, list[str]]:
+    """Return searchable MA metadata without depending on one provider shape."""
+    metadata = book.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        metadata = {}
+
+    fields = {
+        "authors": book.get("authors"),
+        "narrators": book.get("narrators"),
+        "collections": metadata.get("collections"),
+        "performers": metadata.get("performers"),
+        "genres": metadata.get("genres"),
+    }
+    aliases = {key: _named_values(value) for key, value in fields.items()}
+
+    description = metadata.get("description")
+    if isinstance(description, str) and description.strip():
+        aliases["description"] = [description.strip()]
+    else:
+        aliases["description"] = []
+    return aliases
+
+
 def build_catalog(raw_books: list[dict]) -> list[dict]:
     catalog = []
     for b in raw_books:
@@ -95,10 +136,18 @@ def build_catalog(raw_books: list[dict]) -> list[dict]:
                 book_number = o_num
             extra_aliases = o_aliases
 
-        # search_text is what fuzzy matching actually runs against: the
-        # cleaned title plus any aliases, so a hit on an alias scores the
-        # same as a hit on the title itself.
-        search_text = " ".join([title] + extra_aliases)
+        metadata_aliases = _metadata_aliases(b)
+        searchable_metadata = [
+            value
+            for field in ("authors", "narrators", "collections", "performers")
+            for value in metadata_aliases[field]
+            if value not in extra_aliases
+        ]
+
+        # search_text is what fuzzy matching actually runs against. Keep the
+        # structured fields too, so exact metadata prematching can be added
+        # without parsing the flattened string later.
+        search_text = " ".join([title] + extra_aliases + searchable_metadata)
 
         catalog.append({
             "title": title,
@@ -106,6 +155,7 @@ def build_catalog(raw_books: list[dict]) -> list[dict]:
             "series": series,
             "book_number": book_number,
             "aliases": extra_aliases,
+            "metadata": metadata_aliases,
             "search_text": search_text,
         })
     return catalog
