@@ -1,0 +1,338 @@
+blueprint:
+  name: Audiobook Voice Handler (local matcher)
+  description: >
+    Routes voice requests from one Voice Preview / Assist satellite device to
+    a local audiobook-matcher service (github.com/cantolick/ha-rapidfuzz-ma),
+    handling play / pause / resume / next-chapter / "what books do I have"
+    requests against a curated Music Assistant playlist. No LLM, no cloud
+    dependency — fuzzy string matching against a playlist you curate directly
+    in Music Assistant.
+
+    Requires three rest_command services already configured (see the repo's
+    rest_commands.yaml): `ma_in_progress_audiobooks`, `ma_play_audiobook`, and
+    `book_match` (pointed at your running audiobook-matcher instance).
+  domain: automation
+  source_url: https://github.com/cantolick/ha-rapidfuzz-ma/blob/main/blueprints/audiobook_voice_handler.yaml
+  input:
+    satellite_device:
+      name: Voice Satellite Device
+      description: The Voice Preview / Assist satellite device this automation listens to. Only voice from this device is handled.
+      selector:
+        device:
+          filter:
+            - integration: esphome
+            - integration: assist_satellite
+
+    tts_target:
+      name: TTS / Announcement Target
+      description: >
+        The media_player entity used for spoken responses — usually the
+        satellite's own native entity (supports the MEDIA_ANNOUNCE feature,
+        so it interrupts without disturbing whatever else is playing).
+      selector:
+        entity:
+          domain: media_player
+
+    control_target:
+      name: Playback Control Target
+      description: >
+        The media_player entity that actually reflects/controls audiobook
+        playback (pause, next chapter) — often a separate Music-Assistant-
+        managed entity from the satellite's own native one. Check which
+        entity shows real playback state (title, position) if unsure.
+      selector:
+        entity:
+          domain: media_player
+
+    queue_id:
+      name: Music Assistant Queue ID
+      description: >
+        The Music Assistant internal player_id used as queue_id for
+        player_queues/play_media. Find it via the MA API's players/all
+        command — it's usually the same string as an entity_id but confirm
+        with player_queues/get, since it isn't always the same entity you'd
+        pick for playback control above.
+      selector:
+        text:
+
+    playlist_name:
+      name: Playlist Name
+      description: >
+        Which playlist key (a key in the matcher's PLAYLIST_SOURCES_JSON
+        config) this device's requests should search.
+      default: "kids"
+      selector:
+        text:
+
+trigger:
+  - trigger: conversation
+    command:
+      - "{utterance}"
+
+variables:
+  satellite_device_id: !input satellite_device
+  ha_queue_id: !input queue_id
+  ha_playlist_name: !input playlist_name
+
+condition:
+  - condition: template
+    value_template: "{{ trigger.device_id == satellite_device_id }}"
+
+action:
+  - variables:
+      utterance: "{{ trigger.slots.utterance }}"
+
+  # ── Step 1: Keyword pre-filter ─────────────────────────────────
+  # Only audiobook-related requests get past this point. Everything else
+  # gets a friendly rejection so this blueprint never intercepts unrelated
+  # Assist requests on the satellite it's scoped to.
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: >
+              {% set u = utterance | lower %}
+              {% set keywords = [
+                'play', 'book', 'read', 'listen', 'story',
+                'chapter', 'resume', 'continue', 'audiobook',
+                'where i left', 'what books', 'which books',
+                'pause', 'stop', 'next chapter'
+              ] %}
+              {{ keywords | select('in', u) | list | length > 0 }}
+        sequence:
+
+          # ── Step 2: Detect intent type ─────────────────────────
+          - variables:
+              intent: >
+                {% set u = utterance | lower %}
+                {% if 'resume' in u or 'continue' in u or 'where i left' in u or 'i was listening' in u %}
+                  resume
+                {% elif 'what books' in u or 'which books' in u or 'list' in u or 'do i have' in u %}
+                  list
+                {% elif 'pause' in u or 'stop' in u %}
+                  control
+                {% elif 'next chapter' in u %}
+                  control
+                {% else %}
+                  search
+                {% endif %}
+
+          # ── Step 3: Handle simple controls locally ─────────────
+          # No API calls needed for pause/stop/next
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ intent == 'control' }}"
+                sequence:
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ 'pause' in utterance | lower or 'stop' in utterance | lower }}"
+                        sequence:
+                          - action: media_player.media_pause
+                            target:
+                              entity_id: !input control_target
+                          - action: tts.speak
+                            target:
+                              entity_id: tts.home_assistant_cloud
+                            data:
+                              cache: false
+                              media_player_entity_id: !input tts_target
+                              message: "Paused."
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ 'next chapter' in utterance | lower }}"
+                        sequence:
+                          - action: media_player.media_next_track
+                            target:
+                              entity_id: !input control_target
+                          - action: tts.speak
+                            target:
+                              entity_id: tts.home_assistant_cloud
+                            data:
+                              cache: false
+                              media_player_entity_id: !input tts_target
+                              message: "Skipping to the next chapter."
+
+          # ── Step 4: Resume intent — fetch in-progress books ────
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ intent == 'resume' }}"
+                sequence:
+                  - action: rest_command.ma_in_progress_audiobooks
+                    response_variable: in_progress_response
+
+                  - variables:
+                      in_progress_books: >
+                        {% set items = in_progress_response.content %}
+                        {% if items is string %}
+                          {% set items = items | from_json %}
+                        {% endif %}
+                        {% set ns = namespace(books=[]) %}
+                        {% for b in items %}
+                          {% set clean_title = b.name | regex_replace('\s*\(Unabridged\)', '') %}
+                          {% set ns.books = ns.books + [{"title": clean_title, "uri": b.uri}] %}
+                        {% endfor %}
+                        {{ ns.books | tojson }}
+
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ in_progress_books | from_json | length == 0 }}"
+                        sequence:
+                          - action: tts.speak
+                            target:
+                              entity_id: tts.home_assistant_cloud
+                            data:
+                              cache: false
+                              media_player_entity_id: !input tts_target
+                              message: "You don't have any audiobooks in progress. Try asking me to play a specific book."
+                    default:
+                      - action: rest_command.book_match
+                        data:
+                          utterance: "{{ utterance }}"
+                          books_json: "{{ in_progress_books }}"
+                          mode: "resume"
+                        response_variable: match_response
+
+                      - variables:
+                          match: >
+                            {% set r = match_response.content %}
+                            {% if r is string %}{{ r | from_json }}{% else %}{{ r }}{% endif %}
+
+                      - choose:
+                          - conditions:
+                              - condition: template
+                                value_template: "{{ match.error is not defined and match.disambiguation is not defined }}"
+                            sequence:
+                              - action: rest_command.ma_play_audiobook
+                                data:
+                                  queue_id: "{{ ha_queue_id }}"
+                                  uri: "{{ match.uri }}"
+                              - action: tts.speak
+                                target:
+                                  entity_id: tts.home_assistant_cloud
+                                data:
+                                  cache: false
+                                  media_player_entity_id: !input tts_target
+                                  message: "Resuming {{ match.title }}."
+                          - conditions:
+                              - condition: template
+                                value_template: "{{ match.disambiguation is defined }}"
+                            sequence:
+                              - action: tts.speak
+                                target:
+                                  entity_id: tts.home_assistant_cloud
+                                data:
+                                  cache: false
+                                  media_player_entity_id: !input tts_target
+                                  message: >
+                                    Did you mean
+                                    {{ match.disambiguation | map(attribute='title') | join(', or ') }}?
+                        default:
+                          - action: tts.speak
+                            target:
+                              entity_id: tts.home_assistant_cloud
+                            data:
+                              cache: false
+                              media_player_entity_id: !input tts_target
+                              message: "I couldn't find any books in progress to resume."
+
+          # ── Step 5: List intent — show available books ─────────
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ intent == 'list' }}"
+                sequence:
+                  - action: rest_command.book_match
+                    data:
+                      utterance: "{{ utterance }}"
+                      playlist: "{{ ha_playlist_name }}"
+                      mode: "list"
+                    response_variable: list_response
+
+                  - variables:
+                      list_text: >
+                        {% set r = list_response.content %}
+                        {% if r is string %}{% set r = r | from_json %}{% endif %}
+                        {{ r.response | default("You have lots of great books. Try asking me to play one by name.") }}
+
+                  - action: tts.speak
+                    target:
+                      entity_id: tts.home_assistant_cloud
+                    data:
+                      cache: false
+                      media_player_entity_id: !input tts_target
+                      message: "{{ list_text }}"
+
+          # ── Step 6: Search intent — find and play a book ───────
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ intent == 'search' }}"
+                sequence:
+                  - action: rest_command.book_match
+                    data:
+                      utterance: "{{ utterance }}"
+                      playlist: "{{ ha_playlist_name }}"
+                      mode: "search"
+                    response_variable: match_response
+
+                  - variables:
+                      match: >
+                        {% set r = match_response.content %}
+                        {% if r is string %}{{ r | from_json }}{% else %}{{ r }}{% endif %}
+
+                  - choose:
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ match.error is not defined and match.disambiguation is not defined }}"
+                        sequence:
+                          - action: rest_command.ma_play_audiobook
+                            data:
+                              queue_id: "{{ ha_queue_id }}"
+                              uri: "{{ match.uri }}"
+                          - action: tts.speak
+                            target:
+                              entity_id: tts.home_assistant_cloud
+                            data:
+                              cache: false
+                              media_player_entity_id: !input tts_target
+                              message: >
+                                {% if match.confidence == 'low' %}
+                                  I think you might want {{ match.title }}. Starting it now.
+                                {% else %}
+                                  Playing {{ match.title }}.
+                                {% endif %}
+                      - conditions:
+                          - condition: template
+                            value_template: "{{ match.disambiguation is defined }}"
+                        sequence:
+                          - action: tts.speak
+                            target:
+                              entity_id: tts.home_assistant_cloud
+                            data:
+                              cache: false
+                              media_player_entity_id: !input tts_target
+                              message: >
+                                Did you mean
+                                {{ match.disambiguation | map(attribute='title') | join(', or ') }}?
+                    default:
+                      - action: tts.speak
+                        target:
+                          entity_id: tts.home_assistant_cloud
+                        data:
+                          cache: false
+                          media_player_entity_id: !input tts_target
+                          message: "I couldn't find that book. Try asking for it by a different name, or ask me what books you have."
+
+    default:
+      - action: tts.speak
+        target:
+          entity_id: tts.home_assistant_cloud
+        data:
+          cache: false
+          media_player_entity_id: !input tts_target
+          message: "I can only help you play audiobooks on this device. Try saying 'play Harry Potter' or 'what books do I have'."
+
+mode: single

@@ -94,15 +94,41 @@ Returns one of:
 
 **`GET /health`** / **`POST /refresh`** — see Configuration above.
 
+## Home Assistant Blueprint
+
+`blueprints/audiobook_voice_handler.yaml` is a ready-to-import automation
+that wires a Voice Preview / Assist satellite device to this service — no
+hand-edited YAML needed on the Home Assistant side.
+
+**Import it**: Settings → Automations & Scenes → Blueprints → Import Blueprint,
+paste:
+```
+https://github.com/cantolick/ha-rapidfuzz-ma/blob/main/blueprints/audiobook_voice_handler.yaml
+```
+
+**Prerequisite**: three `rest_command` services need to already exist in your
+Home Assistant config — `ma_in_progress_audiobooks`, `ma_play_audiobook`, and
+`book_match` (pointed at wherever this service runs). See `rest_commands.yaml`
+in a Home Assistant config repo for the expected shape, or write your own —
+the blueprint just calls them by name.
+
+Once imported, creating an automation from the blueprint asks for 5 things —
+which satellite device it listens to, which entity to speak responses
+through, which entity actually controls playback, the Music Assistant queue
+ID, and which playlist name to search. Repeat per child/device — that's the
+whole "multi-kid" story, no YAML copy-pasting required.
+
 ## Project layout
 
 ```
 matcher/
-  app.py           # FastAPI service, matching logic
-  catalog.py        # title normalization, series/alias data
-  ma_client.py      # minimal Music Assistant API client
+  app.py            # FastAPI service, matching logic
+  catalog.py         # title normalization, series/alias data
+  ma_client.py       # minimal Music Assistant API client
   Dockerfile
   docker-compose.yml
+blueprints/
+  audiobook_voice_handler.yaml   # importable HA automation blueprint
 ```
 
 Home Assistant automations/scripts and any environment-specific config live
