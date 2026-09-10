@@ -11,6 +11,17 @@ blueprint:
     Requires three rest_command services already configured (see the repo's
     rest_commands.yaml): `ma_in_progress_audiobooks`, `ma_play_audiobook`, and
     `book_match` (pointed at your running audiobook-matcher instance).
+
+    **TTS is intentionally disabled in this version.** Some Home Assistant
+    Voice Preview devices on ESPHome 26.6.0/26.6.5 crash when playing any
+    TTS/Assist URL audio — a firmware regression, not specific to this
+    blueprint (see esphome/home-assistant-voice-pe#613, open/unfixed as of
+    26.6.5, no newer firmware yet). Until that's fixed upstream (or your
+    device is downgraded to ESPHome 2026.5.3), this blueprint runs silently:
+    matches play or don't, with no spoken confirmation, error message, or
+    "did you mean" disambiguation prompt. The `tts_target` input is kept so
+    it's a small, non-breaking change to restore TTS calls once the firmware
+    bug is fixed.
   domain: automation
   source_url: https://github.com/cantolick/ha-rapidfuzz-ma/blob/main/blueprints/audiobook_voice_handler.yaml
   input:
@@ -26,9 +37,10 @@ blueprint:
     tts_target:
       name: TTS / Announcement Target
       description: >
-        The media_player entity used for spoken responses — usually the
-        satellite's own native entity (supports the MEDIA_ANNOUNCE feature,
-        so it interrupts without disturbing whatever else is playing).
+        The media_player entity that would be used for spoken responses —
+        currently unused since TTS is disabled (see blueprint description).
+        Kept as an input so it's a small change to restore TTS once the
+        upstream firmware bug is fixed.
       selector:
         entity:
           filter:
@@ -86,8 +98,9 @@ action:
 
   # ── Step 1: Keyword pre-filter ─────────────────────────────────
   # Only audiobook-related requests get past this point. Everything else
-  # gets a friendly rejection so this blueprint never intercepts unrelated
-  # Assist requests on the satellite it's scoped to.
+  # is silently ignored (no TTS — see blueprint description) so this
+  # blueprint never intercepts unrelated Assist requests on the satellite
+  # it's scoped to.
   - choose:
       - conditions:
           - condition: template
@@ -119,7 +132,7 @@ action:
                 {% endif %}
 
           # ── Step 3: Handle simple controls locally ─────────────
-          # No API calls needed for pause/stop/next
+          # No API calls needed for pause/stop/next.
           - choose:
               - conditions:
                   - condition: template
@@ -133,13 +146,6 @@ action:
                           - action: media_player.media_pause
                             target:
                               entity_id: !input control_target
-                          - action: tts.speak
-                            target:
-                              entity_id: tts.home_assistant_cloud
-                            data:
-                              cache: false
-                              media_player_entity_id: !input tts_target
-                              message: "Paused."
                       - conditions:
                           - condition: template
                             value_template: "{{ 'next chapter' in utterance | lower }}"
@@ -147,13 +153,6 @@ action:
                           - action: media_player.media_next_track
                             target:
                               entity_id: !input control_target
-                          - action: tts.speak
-                            target:
-                              entity_id: tts.home_assistant_cloud
-                            data:
-                              cache: false
-                              media_player_entity_id: !input tts_target
-                              message: "Skipping to the next chapter."
 
           # ── Step 4: Resume intent — fetch in-progress books ────
           - choose:
@@ -180,92 +179,34 @@ action:
                   - choose:
                       - conditions:
                           - condition: template
-                            value_template: "{{ in_progress_books | from_json | length == 0 }}"
+                            value_template: "{{ in_progress_books | from_json | length > 0 }}"
                         sequence:
-                          - action: tts.speak
-                            target:
-                              entity_id: tts.home_assistant_cloud
+                          - action: rest_command.book_match
                             data:
-                              cache: false
-                              media_player_entity_id: !input tts_target
-                              message: "You don't have any audiobooks in progress. Try asking me to play a specific book."
-                    default:
-                      - action: rest_command.book_match
-                        data:
-                          utterance: "{{ utterance }}"
-                          books_json: "{{ in_progress_books }}"
-                          mode: "resume"
-                        response_variable: match_response
+                              utterance: "{{ utterance }}"
+                              books_json: "{{ in_progress_books }}"
+                              mode: "resume"
+                            response_variable: match_response
 
-                      - variables:
-                          match: >
-                            {% set r = match_response.content %}
-                            {% if r is string %}{{ r | from_json }}{% else %}{{ r }}{% endif %}
+                          - variables:
+                              match: >
+                                {% set r = match_response.content %}
+                                {% if r is string %}{{ r | from_json }}{% else %}{{ r }}{% endif %}
 
-                      - choose:
-                          - conditions:
-                              - condition: template
-                                value_template: "{{ match.error is not defined and match.disambiguation is not defined }}"
-                            sequence:
-                              - action: rest_command.ma_play_audiobook
-                                data:
-                                  queue_id: "{{ ha_queue_id }}"
-                                  uri: "{{ match.uri }}"
-                              - action: tts.speak
-                                target:
-                                  entity_id: tts.home_assistant_cloud
-                                data:
-                                  cache: false
-                                  media_player_entity_id: !input tts_target
-                                  message: "Resuming {{ match.title }}."
-                          - conditions:
-                              - condition: template
-                                value_template: "{{ match.disambiguation is defined }}"
-                            sequence:
-                              - action: tts.speak
-                                target:
-                                  entity_id: tts.home_assistant_cloud
-                                data:
-                                  cache: false
-                                  media_player_entity_id: !input tts_target
-                                  message: >
-                                    Did you mean
-                                    {{ match.disambiguation | map(attribute='title') | join(', or ') }}?
-                        default:
-                          - action: tts.speak
-                            target:
-                              entity_id: tts.home_assistant_cloud
-                            data:
-                              cache: false
-                              media_player_entity_id: !input tts_target
-                              message: "I couldn't find any books in progress to resume."
+                          - choose:
+                              - conditions:
+                                  - condition: template
+                                    value_template: "{{ match.error is not defined and match.disambiguation is not defined }}"
+                                sequence:
+                                  - action: rest_command.ma_play_audiobook
+                                    data:
+                                      queue_id: "{{ ha_queue_id }}"
+                                      uri: "{{ match.uri }}"
 
           # ── Step 5: List intent — show available books ─────────
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ intent == 'list' }}"
-                sequence:
-                  - action: rest_command.book_match
-                    data:
-                      utterance: "{{ utterance }}"
-                      playlist: "{{ ha_playlist_name }}"
-                      mode: "list"
-                    response_variable: list_response
-
-                  - variables:
-                      list_text: >
-                        {% set r = list_response.content %}
-                        {% if r is string %}{% set r = r | from_json %}{% endif %}
-                        {{ r.response | default("You have lots of great books. Try asking me to play one by name.") }}
-
-                  - action: tts.speak
-                    target:
-                      entity_id: tts.home_assistant_cloud
-                    data:
-                      cache: false
-                      media_player_entity_id: !input tts_target
-                      message: "{{ list_text }}"
+          # Silently no-ops for now — this was purely a TTS response (the
+          # matcher's mode=list reply) and there's no audio state change to
+          # fall back on. Re-enable once TTS is safe again.
 
           # ── Step 6: Search intent — find and play a book ───────
           - choose:
@@ -294,47 +235,5 @@ action:
                             data:
                               queue_id: "{{ ha_queue_id }}"
                               uri: "{{ match.uri }}"
-                          - action: tts.speak
-                            target:
-                              entity_id: tts.home_assistant_cloud
-                            data:
-                              cache: false
-                              media_player_entity_id: !input tts_target
-                              message: >
-                                {% if match.confidence == 'low' %}
-                                  I think you might want {{ match.title }}. Starting it now.
-                                {% else %}
-                                  Playing {{ match.title }}.
-                                {% endif %}
-                      - conditions:
-                          - condition: template
-                            value_template: "{{ match.disambiguation is defined }}"
-                        sequence:
-                          - action: tts.speak
-                            target:
-                              entity_id: tts.home_assistant_cloud
-                            data:
-                              cache: false
-                              media_player_entity_id: !input tts_target
-                              message: >
-                                Did you mean
-                                {{ match.disambiguation | map(attribute='title') | join(', or ') }}?
-                    default:
-                      - action: tts.speak
-                        target:
-                          entity_id: tts.home_assistant_cloud
-                        data:
-                          cache: false
-                          media_player_entity_id: !input tts_target
-                          message: "I couldn't find that book. Try asking for it by a different name, or ask me what books you have."
-
-    default:
-      - action: tts.speak
-        target:
-          entity_id: tts.home_assistant_cloud
-        data:
-          cache: false
-          media_player_entity_id: !input tts_target
-          message: "I can only help you play audiobooks on this device. Try saying 'play Harry Potter' or 'what books do I have'."
 
 mode: single
