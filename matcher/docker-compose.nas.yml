@@ -1,0 +1,25 @@
+# For the NAS: pulls the pre-built image from GitHub Container Registry
+# instead of building from source (docker-compose.yml does that, for local
+# dev). No source files needed on the NAS at all — just this file and a
+# .env with MA_URL / MA_TOKEN.
+#
+#   docker compose -f docker-compose.nas.yml up -d
+#
+# To update to a newer image later:
+#   docker compose -f docker-compose.nas.yml pull
+#   docker compose -f docker-compose.nas.yml up -d
+services:
+  audiobook-matcher:
+    image: ghcr.io/cantolick/ha-rapidfuzz-ma:latest
+    container_name: audiobook-matcher
+    restart: unless-stopped
+    ports:
+      - "8010:8010"
+    environment:
+      MA_URL: ${MA_URL}
+      MA_TOKEN: ${MA_TOKEN}
+    volumes:
+      - audiobook-matcher-cache:/data
+
+volumes:
+  audiobook-matcher-cache:

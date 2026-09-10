@@ -36,6 +36,16 @@ cp .env.example .env   # fill in your Music Assistant URL + token
 docker compose up -d --build
 ```
 
+**Or pull the pre-built image instead of building from source** — a GitHub
+Actions workflow publishes `matcher/` to GitHub Container Registry on every
+push, so a deploy target (a NAS, for example) never needs the source at all:
+
+```bash
+cd matcher
+cp .env.example .env
+docker compose -f docker-compose.nas.yml up -d
+```
+
 ```bash
 curl -X POST http://localhost:8010/match \
   -H "Content-Type: application/json" \
