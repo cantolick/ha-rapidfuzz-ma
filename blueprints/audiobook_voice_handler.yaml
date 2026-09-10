@@ -31,7 +31,8 @@ blueprint:
         so it interrupts without disturbing whatever else is playing).
       selector:
         entity:
-          domain: media_player
+          filter:
+            - domain: media_player
 
     control_target:
       name: Playback Control Target
@@ -42,7 +43,8 @@ blueprint:
         entity shows real playback state (title, position) if unsure.
       selector:
         entity:
-          domain: media_player
+          filter:
+            - domain: media_player
 
     queue_id:
       name: Music Assistant Queue ID
