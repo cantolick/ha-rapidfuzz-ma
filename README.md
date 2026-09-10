@@ -100,6 +100,16 @@ Returns one of:
 that wires a Voice Preview / Assist satellite device to this service — no
 hand-edited YAML needed on the Home Assistant side.
 
+**Spoken responses are currently disabled by default.** Some Home Assistant
+Voice Preview devices on ESPHome 26.6.0/26.6.5 crash when playing any TTS
+audio — an upstream firmware regression
+([esphome/home-assistant-voice-pe#613](https://github.com/esphome/home-assistant-voice-pe/issues/613)),
+not something specific to this project. Until that's fixed (or your device
+is downgraded to ESPHome 2026.5.3), the blueprint runs silently: it plays a
+match or does nothing, with no spoken confirmation, error message, or "did
+you mean" prompt. The `tts_target` input is still there, ready for when TTS
+calls get re-added.
+
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fcantolick%2Fha-rapidfuzz-ma%2Fmain%2Fblueprints%2Faudiobook_voice_handler.yaml)
 
 Or manually: Settings → Automations & Scenes → Blueprints → Import Blueprint,
