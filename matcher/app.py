@@ -43,7 +43,7 @@ STARTUP_RETRY_DELAY_SECS = 5
 TIE_MARGIN = 4
 SCORE_CUTOFF = 55
 FILLER_WORDS = {
-    "play", "the", "a", "an", "book", "please", "can", "you", "i",
+    "play", "the", "a", "an", "book", "please", "can", "you", "i", "by", "narrated",
     "want", "to", "hear", "listen", "story", "audiobook",
     "resume", "continue", "where", "left", "off", "was", "listening", "at",
 }
@@ -168,6 +168,39 @@ def strip_filler(text: str) -> str:
     return " ".join(words) or text
 
 
+def normalized_text(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def metadata_prefilter(query: str, catalog: list[dict]) -> tuple[str, list[dict]]:
+    """Narrow candidates when the utterance names an indexed person/group."""
+    normalized_query = normalized_text(query)
+    matches = []
+    matched_values = set()
+    for entry in catalog:
+        for field in ("authors", "narrators", "collections"):
+            for value in entry.get("metadata", {}).get(field, []):
+                normalized_value = normalized_text(value)
+                if normalized_value and normalized_value in normalized_query:
+                    matches.append(entry)
+                    matched_values.add(normalized_value)
+                    break
+            if entry in matches:
+                break
+
+    if not matches:
+        return query, catalog
+
+    # Remove the matched metadata phrase before title scoring. A request such
+    # as "a book by Jeff Kinney" should rank the title words, not repeat the
+    # author's name for every candidate.
+    title_query = normalized_query
+    for value in sorted(matched_values, key=len, reverse=True):
+        title_query = re.sub(rf"\b{re.escape(value)}\b", " ", title_query)
+    title_query = " ".join(title_query.split())
+    return title_query, matches
+
+
 def extract_book_number(utterance: str) -> int | None:
     lower = utterance.lower()
     for word, num in ORDINAL_WORDS.items():
@@ -211,6 +244,17 @@ def match(req: MatchRequest):
         return {"response": f"You have some great stories to choose from, like {joined}."}
 
     query = strip_filler(req.utterance)
+    query, catalog = metadata_prefilter(query, catalog)
+    if not query:
+        if len(catalog) == 1:
+            e = catalog[0]
+            return {"uri": e["uri"], "title": e["title"], "confidence": "high"}
+        return {
+            "disambiguation": [
+                {"title": e["title"], "uri": e["uri"]} for e in catalog[:3]
+            ]
+        }
+    search_texts = [c["search_text"] for c in catalog]
     results = process.extract(
         query, search_texts, scorer=best_score, limit=len(search_texts), score_cutoff=SCORE_CUTOFF
     )

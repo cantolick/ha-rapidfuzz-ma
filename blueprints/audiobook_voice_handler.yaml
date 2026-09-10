@@ -96,21 +96,19 @@ action:
   - variables:
       utterance: "{{ trigger.slots.utterance }}"
 
-  # ── Step 1: Keyword pre-filter ─────────────────────────────────
-  # Only audiobook-related requests get past this point. Everything else
-  # is silently ignored (no TTS — see blueprint description) so this
-  # blueprint never intercepts unrelated Assist requests on the satellite
-  # it's scoped to.
+  # ── Step 1: Audiobook intent gate ───────────────────────────────
+  # Keep this gate generic: book titles stay in the Music Assistant catalog,
+  # while unrelated Assist requests continue to Home Assistant normally.
   - choose:
       - conditions:
           - condition: template
             value_template: >
               {% set u = utterance | lower %}
               {% set keywords = [
-                'play', 'book', 'read', 'listen', 'story',
-                'chapter', 'resume', 'continue', 'audiobook',
-                'where i left', 'what books', 'which books',
-                'pause', 'stop', 'next chapter'
+                'play', 'read', 'listen', 'story', 'chapter',
+                'resume', 'continue', 'audiobook', 'where i left',
+                'what books', 'which books', 'pause', 'stop',
+                'next chapter'
               ] %}
               {{ keywords | select('in', u) | list | length > 0 }}
         sequence:
