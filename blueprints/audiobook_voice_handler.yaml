@@ -81,7 +81,19 @@ blueprint:
 trigger:
   - trigger: conversation
     command:
-      - "{utterance}"
+      - "play {utterance}"
+      - "read {utterance}"
+      - "listen to {utterance}"
+      - "listen {utterance}"
+      - "resume {utterance}"
+      - "continue {utterance}"
+      - "where I left off"
+      - "what books do I have"
+      - "which books do I have"
+      - "list my books"
+      - "pause"
+      - "stop"
+      - "next chapter"
 
 variables:
   satellite_device_id: !input satellite_device
@@ -94,7 +106,7 @@ condition:
 
 action:
   - variables:
-      utterance: "{{ trigger.slots.utterance }}"
+      utterance: "{{ trigger.sentence }}"
 
   # ── Step 1: Audiobook intent gate ───────────────────────────────
   # Keep this gate generic: book titles stay in the Music Assistant catalog,
