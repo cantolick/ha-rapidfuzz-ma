@@ -5,8 +5,30 @@ blueprint:
     a local audiobook-matcher service (github.com/cantolick/ha-rapidfuzz-ma),
     handling play / pause / resume / next-chapter / "what books do I have"
     requests against a curated Music Assistant playlist. No LLM, no cloud
-    dependency — fuzzy string matching against a playlist you curate directly
-    in Music Assistant.
+    dependency for the matching itself — fuzzy string matching against a
+    playlist you curate directly in Music Assistant.
+
+    The conversation trigger below only matches specific book/audiobook
+    request phrasings ("play ...", "read ...", "resume my audiobook", "what
+    books do I have", "pause the book", "next chapter", etc). Anything the
+    satellite hears that doesn't match one of those phrasings is **not**
+    consumed by this automation — Home Assistant's normal Assist pipeline
+    (including Nabu Casa Cloud speech-to-text/text-to-speech and its usual
+    conversation agent) still handles it, so lights, timers, weather, and
+    general conversation keep working exactly as before this blueprint was
+    imported. Only the recognized book/audiobook phrasings get routed to the
+    matcher.
+
+    **Known trade-off:** the "play/read/listen to/start/put on ..." trigger
+    matches *any* request starting with those verbs, not just audiobooks —
+    "play some music" or "play Taylor Swift" on this device also routes to
+    the matcher (against the curated playlist in `playlist_name`) instead of
+    Nabu Casa's normal media search, and will likely come back as a
+    no-match. Fine if this satellite is only ever asked to play books; if
+    you also want it to handle general music requests via Nabu Casa/Music
+    Assistant directly, tighten the `search` trigger's command list to
+    require "book" or "story" in the phrase (e.g. `"(play|read) [me] [the]
+    {utterance} (book|story)"` or require those words before `{utterance}`).
 
     Requires three rest_command services already configured (see the repo's
     rest_commands.yaml): `ma_in_progress_audiobooks`, `ma_play_audiobook`, and
@@ -79,144 +101,102 @@ blueprint:
         text:
 
 trigger:
-  - trigger: conversation
+  # Each trigger only matches specific book/audiobook phrasings. Anything
+  # else spoken to the device is left alone — it falls through to Home
+  # Assistant's normal Assist pipeline (Nabu Casa Cloud STT/TTS + whatever
+  # conversation agent is otherwise configured) exactly as if this
+  # automation didn't exist.
+  - id: search
+    trigger: conversation
     command:
-      - "{utterance}"
+      - "(play|read|listen to|start|put on) [me] [the] {utterance}"
+
+  - id: resume
+    trigger: conversation
+    command:
+      - "(resume|continue) [my] (audiobook|book|story)"
+      - "(resume|continue) where i left off"
+      - "where was i"
+      - "what was i (reading|listening to)"
+
+  - id: list
+    trigger: conversation
+    command:
+      - "what (books|audiobooks) do i have"
+      - "which (books|audiobooks) do i have"
+      - "what books can i (play|listen to)"
+
+  - id: control_pause
+    trigger: conversation
+    command:
+      - "pause [the] (audiobook|book|story)"
+      - "stop [the] (audiobook|book|story)"
+
+  - id: control_next
+    trigger: conversation
+    command:
+      - "(next|skip to the next) chapter"
 
 variables:
   satellite_device_id: !input satellite_device
   ha_queue_id: !input queue_id
   ha_playlist_name: !input playlist_name
+  utterance: "{{ trigger.sentence }}"
 
 condition:
   - condition: template
     value_template: "{{ trigger.device_id == satellite_device_id }}"
 
 action:
-  - variables:
-      utterance: "{{ trigger.slots.utterance }}"
-
-  # ── Step 1: Audiobook intent gate ───────────────────────────────
-  # Keep this gate generic: book titles stay in the Music Assistant catalog,
-  # while unrelated Assist requests continue to Home Assistant normally.
   - choose:
+      # ── Simple controls — no API calls needed ──────────────────
       - conditions:
-          - condition: template
-            value_template: >
-              {% set u = utterance | lower %}
-              {% set keywords = [
-                'play', 'read', 'listen', 'story', 'chapter',
-                'resume', 'continue', 'audiobook', 'where i left',
-                'what books', 'which books', 'pause', 'stop',
-                'next chapter'
-              ] %}
-              {{ keywords | select('in', u) | list | length > 0 }}
+          - condition: trigger
+            id: control_pause
         sequence:
+          - action: media_player.media_pause
+            target:
+              entity_id: !input control_target
 
-          # ── Step 2: Detect intent type ─────────────────────────
+      - conditions:
+          - condition: trigger
+            id: control_next
+        sequence:
+          - action: media_player.media_next_track
+            target:
+              entity_id: !input control_target
+
+      # ── Resume — fetch in-progress books ────────────────────────
+      - conditions:
+          - condition: trigger
+            id: resume
+        sequence:
+          - action: rest_command.ma_in_progress_audiobooks
+            response_variable: in_progress_response
+
           - variables:
-              intent: >
-                {% set u = utterance | lower %}
-                {% if 'resume' in u or 'continue' in u or 'where i left' in u or 'i was listening' in u %}
-                  resume
-                {% elif 'what books' in u or 'which books' in u or 'list' in u or 'do i have' in u %}
-                  list
-                {% elif 'pause' in u or 'stop' in u %}
-                  control
-                {% elif 'next chapter' in u %}
-                  control
-                {% else %}
-                  search
+              in_progress_books: >
+                {% set items = in_progress_response.content %}
+                {% if items is string %}
+                  {% set items = items | from_json %}
                 {% endif %}
+                {% set ns = namespace(books=[]) %}
+                {% for b in items %}
+                  {% set clean_title = b.name | regex_replace('\s*\(Unabridged\)', '') %}
+                  {% set ns.books = ns.books + [{"title": clean_title, "uri": b.uri}] %}
+                {% endfor %}
+                {{ ns.books | tojson }}
 
-          # ── Step 3: Handle simple controls locally ─────────────
-          # No API calls needed for pause/stop/next.
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ intent == 'control' }}"
-                sequence:
-                  - choose:
-                      - conditions:
-                          - condition: template
-                            value_template: "{{ 'pause' in utterance | lower or 'stop' in utterance | lower }}"
-                        sequence:
-                          - action: media_player.media_pause
-                            target:
-                              entity_id: !input control_target
-                      - conditions:
-                          - condition: template
-                            value_template: "{{ 'next chapter' in utterance | lower }}"
-                        sequence:
-                          - action: media_player.media_next_track
-                            target:
-                              entity_id: !input control_target
-
-          # ── Step 4: Resume intent — fetch in-progress books ────
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ intent == 'resume' }}"
-                sequence:
-                  - action: rest_command.ma_in_progress_audiobooks
-                    response_variable: in_progress_response
-
-                  - variables:
-                      in_progress_books: >
-                        {% set items = in_progress_response.content %}
-                        {% if items is string %}
-                          {% set items = items | from_json %}
-                        {% endif %}
-                        {% set ns = namespace(books=[]) %}
-                        {% for b in items %}
-                          {% set clean_title = b.name | regex_replace('\s*\(Unabridged\)', '') %}
-                          {% set ns.books = ns.books + [{"title": clean_title, "uri": b.uri}] %}
-                        {% endfor %}
-                        {{ ns.books | tojson }}
-
-                  - choose:
-                      - conditions:
-                          - condition: template
-                            value_template: "{{ in_progress_books | from_json | length > 0 }}"
-                        sequence:
-                          - action: rest_command.book_match
-                            data:
-                              utterance: "{{ utterance }}"
-                              books_json: "{{ in_progress_books }}"
-                              mode: "resume"
-                            response_variable: match_response
-
-                          - variables:
-                              match: >
-                                {% set r = match_response.content %}
-                                {% if r is string %}{{ r | from_json }}{% else %}{{ r }}{% endif %}
-
-                          - choose:
-                              - conditions:
-                                  - condition: template
-                                    value_template: "{{ match.error is not defined and match.disambiguation is not defined }}"
-                                sequence:
-                                  - action: rest_command.ma_play_audiobook
-                                    data:
-                                      queue_id: "{{ ha_queue_id }}"
-                                      uri: "{{ match.uri }}"
-
-          # ── Step 5: List intent — show available books ─────────
-          # Silently no-ops for now — this was purely a TTS response (the
-          # matcher's mode=list reply) and there's no audio state change to
-          # fall back on. Re-enable once TTS is safe again.
-
-          # ── Step 6: Search intent — find and play a book ───────
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ intent == 'search' }}"
+                    value_template: "{{ in_progress_books | from_json | length > 0 }}"
                 sequence:
                   - action: rest_command.book_match
                     data:
                       utterance: "{{ utterance }}"
-                      playlist: "{{ ha_playlist_name }}"
-                      mode: "search"
+                      books_json: "{{ in_progress_books }}"
+                      mode: "resume"
                     response_variable: match_response
 
                   - variables:
@@ -233,5 +213,41 @@ action:
                             data:
                               queue_id: "{{ ha_queue_id }}"
                               uri: "{{ match.uri }}"
+
+      # ── List — silently no-ops for now ──────────────────────────
+      # This was purely a TTS response (the matcher's mode=list reply) and
+      # there's no audio state change to fall back on. Re-enable once TTS
+      # is safe again.
+      - conditions:
+          - condition: trigger
+            id: list
+        sequence: []
+
+      # ── Search — find and play a book ───────────────────────────
+      - conditions:
+          - condition: trigger
+            id: search
+        sequence:
+          - action: rest_command.book_match
+            data:
+              utterance: "{{ utterance }}"
+              playlist: "{{ ha_playlist_name }}"
+              mode: "search"
+            response_variable: match_response
+
+          - variables:
+              match: >
+                {% set r = match_response.content %}
+                {% if r is string %}{{ r | from_json }}{% else %}{{ r }}{% endif %}
+
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ match.error is not defined and match.disambiguation is not defined }}"
+                sequence:
+                  - action: rest_command.ma_play_audiobook
+                    data:
+                      queue_id: "{{ ha_queue_id }}"
+                      uri: "{{ match.uri }}"
 
 mode: single

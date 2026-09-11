@@ -100,6 +100,23 @@ Returns one of:
 that wires a Voice Preview / Assist satellite device to this service — no
 hand-edited YAML needed on the Home Assistant side.
 
+**Only book/audiobook phrasings are intercepted.** The automation's
+conversation trigger is scoped to specific request shapes — "play/read/listen
+to/start ...", "resume my audiobook," "what books do I have," "pause/stop the
+book," "next chapter." Anything else the satellite hears (lights, timers,
+weather, general chat) isn't matched by this automation at all, so it falls
+straight through to Home Assistant's normal Assist pipeline — including Nabu
+Casa Cloud speech-to-text/text-to-speech and whatever conversation agent you
+already have configured — completely unaffected by this blueprint. Only the
+recognized book/audiobook phrasings get routed to the rapidfuzz matcher.
+
+One trade-off to know about: the "play/read/listen to ..." trigger matches
+any request starting with those verbs, so "play some music" or "play Taylor
+Swift" on that device also goes to the matcher instead of Nabu Casa's normal
+media search, and will likely come back as a no-match. Fine if the satellite
+is only ever asked for books; otherwise tighten that trigger's command list
+to require "book" or "story" in the phrase.
+
 **Spoken responses are currently disabled by default.** Some Home Assistant
 Voice Preview devices on ESPHome 26.6.0/26.6.5 crash when playing any TTS
 audio — an upstream firmware regression
