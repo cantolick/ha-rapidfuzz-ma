@@ -19,7 +19,6 @@ services:
       MA_URL: ${MA_URL}
       MA_TOKEN: ${MA_TOKEN}
       PLAYLIST_SOURCES_JSON: ${PLAYLIST_SOURCES_JSON}
-      MUSIC_ENABLED: ${MUSIC_ENABLED:-false}
     volumes:
       - audiobook-matcher-cache:/data
 

@@ -77,7 +77,6 @@ including for a pulled prebuilt image (see `.env.example`):
 | `MA_TOKEN` | A Music Assistant long-lived API token |
 | `PLAYLIST_SOURCES_JSON` | JSON object mapping a playlist name to the MA playlist item_id(s) it's built from |
 | `CACHE_PATH` | Where the last-successful catalog is cached (default `/data/catalog_cache.json`) |
-| `MUSIC_ENABLED` | `true` to also fetch a general music library (tracks) and fall back to it for non-book "play X" requests — see below. Default `false`. |
 
 `PLAYLIST_SOURCES_JSON` example:
 ```json
@@ -95,24 +94,28 @@ then falls back to the last cached catalog rather than crashing or serving
 nothing. `/health` reports `"stale": true` when it's running on that cache
 instead of a fresh fetch. `POST /refresh` re-fetches on demand.
 
-**Turning "play Taylor Swift" from silence into an actual answer:** by
-default, a "play X" request that doesn't look book-related and doesn't match
-the book catalog gets a silent `passthrough` (see the outcome table below) —
-better than a wrong-sounding "I couldn't find that book," but it still
-doesn't play the song. Set `MUSIC_ENABLED=true` to fetch your Music
-Assistant music library (whatever providers you have configured — Apple
-Music, Spotify, etc.) at startup and try it as a fallback before giving up.
-Artist-only requests ("play Taylor Swift") and track-title requests ("play
-Shake It Off") both work through the exact same matching logic already used
-for audiobook titles and authors — `catalog.py` treats a track's `artists`
-field the same way it treats an audiobook's `authors` field, so there's no
-separate music-matching code path to maintain. This is scoped to Music
-Assistant's `track` media type specifically, which is structurally separate
-from `audiobook` in MA's data model — an Audiobookshelf-backed library
-shouldn't be reachable from this fallback at all, though that's worth
-confirming against your own instance (see `ma_client.fetch_music_tracks`)
-before relying on it. The book catalog is always tried first; music is only
-consulted when the book search comes up empty.
+**Turning "play Taylor Swift" from silence into an actual answer:** a "play
+X" request that doesn't look book-related and doesn't match the book
+catalog would otherwise get a silent `passthrough` (see the outcome table
+below) — better than a wrong-sounding "I couldn't find that book," but it
+still doesn't play the song. The service always attempts to fetch your
+Music Assistant music library (whatever providers you have configured —
+Apple Music, Spotify, etc.) at startup and tries it as a fallback before
+giving up; if you have no music providers configured, or your MA version
+doesn't support the endpoint, that fetch just fails quietly (a warning in
+the logs) and passthrough behaves exactly as before — no separate flag to
+turn on. Artist-only requests ("play Taylor Swift") and track-title
+requests ("play Shake It Off") both work through the exact same matching
+logic already used for audiobook titles and authors — `catalog.py` treats a
+track's `artists` field the same way it treats an audiobook's `authors`
+field, so there's no separate music-matching code path to maintain. This is
+scoped to Music Assistant's `track` media type specifically, which is
+structurally separate from `audiobook` in MA's data model — an
+Audiobookshelf-backed library shouldn't be reachable from this fallback at
+all, though that's worth confirming against your own instance (see
+`ma_client.fetch_music_tracks`) before relying on it. The book catalog is
+always tried first; music is only consulted when the book search comes up
+empty.
 
 **How "resume" finds what's in progress:** Music Assistant has a
 [dedicated endpoint for exactly this](https://www.music-assistant.io/api/#get-in-progress-items-audiobooks-podcast-episodes-),
@@ -177,9 +180,10 @@ service, a plain no-match would speak "I couldn't find that book" — a
 confusing answer to someone who never asked for one. The service checks
 whether the utterance contains a book-ish word ("book," "audiobook,"
 "story," "chapter") before deciding: contains one → `not_found` (apologize,
-a real book request just missed); doesn't → `passthrough` (stay silent),
-unless `MUSIC_ENABLED` is on, in which case the music library gets tried
-first — see below. It's a cheap heuristic, not a fix for the underlying
+a real book request just missed); doesn't → the music library gets tried
+first (see below), and only falls through to `passthrough` (stay silent) if
+that doesn't find anything either. It's a cheap heuristic, not a fix for
+the underlying
 trigger over-match — tightening `search_commands` per the note above is
 still the real fix if this comes up often in your household.
 

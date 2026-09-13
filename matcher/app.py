@@ -37,12 +37,6 @@ FULL_LIBRARY_KEY = "__all__"  # used instead of None so the cache file (plain
 # JSON, string keys only) round-trips without special-casing
 MUSIC_CATALOG_KEY = "__music__"
 
-# Off by default — most deployments of this project are audiobook-only (see
-# README), and fetching/caching a whole music library is unnecessary work
-# for them. Turn on once you've verified fetch_music_tracks() against your
-# own MA instance (see ma_client.py).
-MUSIC_ENABLED = os.environ.get("MUSIC_ENABLED", "").lower() in ("1", "true", "yes")
-
 CACHE_PATH = Path(os.environ.get("CACHE_PATH", "/data/catalog_cache.json"))
 STARTUP_RETRY_ATTEMPTS = 3
 STARTUP_RETRY_DELAY_SECS = 5
@@ -65,8 +59,15 @@ async def _fetch_all_catalogs() -> dict:
                     raw_books.append(b)
         catalogs[name] = build_catalog(raw_books)
     catalogs[FULL_LIBRARY_KEY] = build_catalog(await ma_client.fetch_full_library())
-    if MUSIC_ENABLED:
+    try:
         catalogs[MUSIC_CATALOG_KEY] = build_catalog(await ma_client.fetch_music_tracks())
+    except Exception as e:
+        # Optional — a server with no music providers configured, or an
+        # older MA version without this endpoint, shouldn't take down
+        # audiobook matching over it. Just means the passthrough fallback
+        # in /v1/assist has nothing to fall back to.
+        print(f"WARNING: music track fetch failed ({e}) — non-book \"play X\" "
+              f"requests will fall through to passthrough instead of a music search.")
     return catalogs
 
 

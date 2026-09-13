@@ -75,11 +75,16 @@ async def fetch_music_tracks(limit: int = 500) -> list[dict]:
     audiobooks in MA's data model, not just a differently-filtered view of
     the same list, so this should never surface Audiobookshelf content.
 
+    Called unconditionally at startup (see app.py) and allowed to fail —
+    a server with no music providers configured, or an older MA version
+    without this endpoint, just means the music fallback in /v1/assist has
+    nothing to fall back to, not a broken deployment.
+
     VERIFY BEFORE RELYING ON THIS: `music/tracks/library_items` mirrors the
     naming convention `music/audiobooks/library_items` already uses, but
     isn't independently confirmed against a live server from here. Check a
-    real response shape (particularly the `artists` field catalog.py reads
-    below) before turning MUSIC_ENABLED on.
+    real response shape (particularly the `artists` field catalog.py reads)
+    against <host>:8095/api-docs/swagger.
     """
     result = await _call(
         "music/tracks/library_items",
