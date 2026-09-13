@@ -41,13 +41,23 @@ blueprint:
       (filtered to Music-Assistant-backed players only) instead of a
       `queue_id` you had to dig out of MA's API by hand.
 
-    **Known trade-off, unchanged from v1:** the default `search_commands`
-    pattern still matches any "play/read/listen to/start/put on ..." phrase,
-    not just audiobooks — "play some music" also routes to the matcher
-    against the curated playlist and will likely come back as a no-match.
-    `search_commands` is now a blueprint input specifically so you can
-    tighten it yourself (e.g. require "book" or "story" in the phrase)
-    without editing YAML.
+    **Important — conversation sentence triggers match house-wide, not just
+    on the bound device.** Home Assistant matches sentence triggers against
+    *any* Assist device before checking a trigger's own conditions or
+    falling through to built-in intents — this is confirmed, permanent HA
+    behavior, not something this blueprint can route around. A `search_commands`
+    pattern using verbs also used for other smart-home intents (earlier
+    versions of this default included "start" and "put on") would
+    intercept "start a timer," "start the vacuum," or "put on the hallway
+    lights" from *every* Assist device in the house — the automation's
+    `satellite_device` condition then blocks it from running, but the
+    sentence has already been claimed, so HA just says "Done" and nothing
+    happens, on any device, not only the one this automation is bound to.
+    The default below only uses "play/read/listen to," verbs not
+    meaningfully used for other Assist intents, specifically to avoid this.
+    **Known trade-off that remains:** it still matches non-book "play X"
+    requests like "play some music" on the bound device specifically — see
+    `search_commands` below for how to tighten that further if it comes up.
 
     **Before turning on `speech_enabled`:** some Voice PE devices crash on
     ESPHome 26.6.0/26.6.5 when playing any TTS audio (upstream firmware
@@ -112,14 +122,20 @@ blueprint:
       name: "Advanced: Search Trigger Phrasings"
       description: >
         Sentence patterns (Home Assistant sentence-trigger syntax) that
-        route to the matcher's search mode. The default is intentionally
-        broad — it matches "play/read/listen to/start/put on" followed by
-        anything, which also catches non-book requests like "play some
-        music" on this device (see the known trade-off above). Replace with
-        something like "(play|read) [me] [the] {utterance} (book|story)" to
-        require a book-ish word if that's a problem for your household.
+        route to the matcher's search mode. The default deliberately uses
+        only "play/read/listen to" — verbs not used for other Assist
+        intents — since sentence triggers match house-wide before a
+        device condition is checked (see the blueprint description above).
+        Avoid adding verbs like "start" or "put on" here even though they
+        read naturally ("start the wimpy kid book"): they collide with
+        timer/vacuum/light intents on every Assist device, not just this
+        one, silently swallowing them into a generic "Done" instead. The
+        remaining trade-off is non-book requests like "play some music" on
+        this device specifically — replace with something like "(play|read)
+        [me] [the] {utterance} (book|story)" to require a book-ish word if
+        that comes up in your household.
       default:
-        - "(play|read|listen to|start|put on) [me] [the] {utterance}"
+        - "(play|read|listen to) [me] [the] {utterance}"
       selector:
         text:
           multiple: true

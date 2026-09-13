@@ -15,8 +15,12 @@ rest_command:
     method: POST
     headers:
       Content-Type: application/json
+    # `utterance` is raw speech-to-text output — it can contain a quote,
+    # backslash, or other character that breaks a hand-built JSON string.
+    # `to_json` escapes each value properly instead of relying on the
+    # utterance never containing anything awkward.
     payload: >-
-      {"utterance": "{{ utterance }}", "hint": "{{ hint }}", "playlist": "{{ playlist }}"}
+      {"utterance": {{ utterance | to_json }}, "hint": {{ hint | to_json }}, "playlist": {{ playlist | to_json }}}
     content_type: "application/json; charset=utf-8"
 
 # --- legacy v1 blueprint (blueprints/legacy/audiobook_voice_handler_v1.yaml) -
@@ -30,8 +34,8 @@ rest_command:
 #     headers:
 #       Content-Type: application/json
 #     payload: >-
-#       {"utterance": "{{ utterance }}", "playlist": "{{ playlist | default('') }}",
-#        "books_json": {{ books_json | default('null') }}, "mode": "{{ mode }}"}
+#       {"utterance": {{ utterance | to_json }}, "playlist": {{ playlist | default('') | to_json }},
+#        "books_json": {{ books_json | default('null') }}, "mode": {{ mode | to_json }}}
 #     content_type: "application/json; charset=utf-8"
 #
 #   ma_in_progress_audiobooks:
@@ -48,8 +52,10 @@ rest_command:
 #     # last_played ordering has been reported unreliable for
 #     # Audiobookshelf-backed libraries (see the v2 blueprint's
 #     # description). The v2 blueprint's book_assist doesn't have this
-#     # problem — it asks Audiobookshelf directly instead. Migrating is
-#     # the actual fix, not tuning this query further.
+#     # problem — it uses Music Assistant's own dedicated
+#     # music/in_progress_items command instead (same MA connection, no
+#     # second credential). Migrating is the actual fix, not tuning this
+#     # query further.
 #
 #   ma_play_audiobook:
 #     url: "http://YOUR-MUSIC-ASSISTANT-HOST:8095/api"

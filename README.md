@@ -210,19 +210,34 @@ hand-edited YAML needed on the Home Assistant side.
 
 **Only book/audiobook phrasings are intercepted.** The automation's
 conversation trigger is scoped to specific request shapes — "play/read/listen
-to/start ...", "resume my audiobook," "what books do I have," "pause/stop the
+to ...", "resume my audiobook," "what books do I have," "pause/stop the
 book," "next chapter." Anything else the satellite hears (lights, timers,
 weather, general chat) isn't matched by this automation at all, so it falls
 straight through to Home Assistant's normal Assist pipeline — including Nabu
 Casa Cloud speech-to-text/text-to-speech and whatever conversation agent you
 already have configured — completely unaffected by this blueprint.
 
-The "play/read/listen to ..." trigger is a blueprint input (`search_commands`)
-specifically because it's the one prone to false positives — the default
-matches any request starting with those verbs, so "play some music" also goes
-to the matcher and will likely come back as `not_found`. Tighten it yourself
-(e.g. `"(play|read) [me] [the] {utterance} (book|story)"`) if that's a problem
-in your household; no YAML editing required, just change the input.
+**Why the default only uses "play/read/listen to," and not other verbs that
+read naturally:** Home Assistant matches conversation sentence triggers
+house-wide, against any Assist device, before checking a trigger's own
+condition or falling through to built-in intents — confirmed, permanent HA
+behavior. An earlier version of this default also included "start" and "put
+on," which would intercept "start a timer," "start the vacuum," or "put on
+the hallway lights" from *every* Assist device in the house, not just the
+one bound to this automation — the device condition then blocks the
+automation from running, but the sentence was already claimed, so HA just
+says "Done" and the timer/vacuum/light command silently never happens,
+anywhere. "play/read/listen to" don't have this problem; they aren't used
+for other Assist intents. The `search_commands` blueprint input is there so
+you can adjust this yourself, but avoid reintroducing verbs shared with
+other smart-home intents.
+
+The remaining, narrower trade-off: the default still matches non-book "play
+X" requests like "play some music" *on the bound device*, which will likely
+come back as `not_found` (or get handled by the music fallback below).
+Tighten it yourself (e.g. `"(play|read) [me] [the] {utterance} (book|story)"`)
+if that's a problem in your household; no YAML editing required, just
+change the input.
 
 Setup asks for four things:
 - **Voice Satellite Device** — which device this automation listens to.
