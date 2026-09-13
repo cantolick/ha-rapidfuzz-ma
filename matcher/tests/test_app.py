@@ -5,6 +5,7 @@ core.py since it's about how to *phrase* a no-match, not how to *find* one.
 import asyncio
 
 import app
+import ma_client
 from fixtures import make_catalog, make_music_catalog
 
 
@@ -47,9 +48,32 @@ def test_list_intent_returns_info():
     assert result["media"] is None
 
 
-def test_resume_without_audiobookshelf_configured_is_unavailable():
+def test_resume_when_music_assistant_unreachable_is_unavailable(monkeypatch):
+    async def _raise(*args, **kwargs):
+        raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(ma_client, "fetch_in_progress_audiobooks", _raise)
     result = _assist("resume my audiobook", hint="resume")
     assert result["outcome"] == "unavailable"
+
+
+def test_resume_with_nothing_in_progress_is_not_found(monkeypatch):
+    async def _empty(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(ma_client, "fetch_in_progress_audiobooks", _empty)
+    result = _assist("resume my audiobook", hint="resume")
+    assert result["outcome"] == "not_found"
+
+
+def test_resume_with_in_progress_book_plays_it(monkeypatch):
+    async def _in_progress(*args, **kwargs):
+        return [{"name": "The Hobbit", "uri": "lib://6"}]
+
+    monkeypatch.setattr(ma_client, "fetch_in_progress_audiobooks", _in_progress)
+    result = _assist("resume my audiobook", hint="resume")
+    assert result["outcome"] == "play"
+    assert result["media"]["title"] == "The Hobbit"
 
 
 def test_non_book_request_without_music_catalog_is_still_passthrough():

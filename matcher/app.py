@@ -16,7 +16,6 @@ from typing import Optional
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-import absclient
 import core
 import ma_client
 import responses
@@ -268,7 +267,7 @@ async def assist(req: AssistRequest):
 
     if intent == "resume":
         try:
-            in_progress_raw = await absclient.fetch_in_progress_audiobooks()
+            in_progress_raw = await ma_client.fetch_in_progress_audiobooks()
         except Exception as e:
             return _envelope("unavailable", responses.unavailable(), debug={**debug_base, "reason": str(e)})
         if not in_progress_raw:

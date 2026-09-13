@@ -39,6 +39,35 @@ async def fetch_full_library() -> list[dict]:
     return result if isinstance(result, list) else []
 
 
+async def fetch_in_progress_audiobooks() -> list[dict]:
+    """Audiobooks with real, unfinished playback progress, most-recent first.
+
+    Filters and sorts client-side instead of asking Music Assistant to do it
+    via `order_by` — the HA community has reported MA's own `last_played` /
+    `last_played_desc` ordering as unreliable for Audiobookshelf-backed
+    libraries:
+    https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483
+
+    That report is about the *query*, not confirmed to be about the
+    underlying per-item field values — so this works around it by reusing
+    the same `music/audiobooks/library_items` call the catalog already
+    trusts, and doing the "in progress, most recent" filtering ourselves.
+
+    VERIFY BEFORE RELYING ON THIS: if the field names below
+    (`resume_position_ms`, `fully_played`, `last_played`) don't match what
+    your server actually returns, or if those per-item values are
+    themselves inaccurate (not just MA's sort of them), this will still
+    misbehave — check a real response from your own instance first.
+    """
+    items = await fetch_full_library()
+    in_progress = [
+        b for b in items
+        if not b.get("fully_played") and (b.get("resume_position_ms") or 0) > 0
+    ]
+    in_progress.sort(key=lambda b: b.get("last_played") or "", reverse=True)
+    return in_progress
+
+
 async def fetch_music_tracks(limit: int = 500) -> list[dict]:
     """All tracks across whatever music providers are configured in Music
     Assistant (Apple Music, Spotify, etc.) — a different media type than

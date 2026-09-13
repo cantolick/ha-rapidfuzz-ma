@@ -77,9 +77,6 @@ including for a pulled prebuilt image (see `.env.example`):
 | `MA_TOKEN` | A Music Assistant long-lived API token |
 | `PLAYLIST_SOURCES_JSON` | JSON object mapping a playlist name to the MA playlist item_id(s) it's built from |
 | `CACHE_PATH` | Where the last-successful catalog is cached (default `/data/catalog_cache.json`) |
-| `ABS_URL` | Audiobookshelf base URL — only needed for the "resume" intent, see below |
-| `ABS_TOKEN` | Audiobookshelf API token — only needed for "resume" |
-| `ABS_INSTANCE_ID` | Audiobookshelf provider instance id, as Music Assistant knows it — only needed for "resume" |
 | `MUSIC_ENABLED` | `true` to also fetch a general music library (tracks) and fall back to it for non-book "play X" requests — see below. Default `false`. |
 
 `PLAYLIST_SOURCES_JSON` example:
@@ -117,14 +114,23 @@ confirming against your own instance (see `ma_client.fetch_music_tracks`)
 before relying on it. The book catalog is always tried first; music is only
 consulted when the book search comes up empty.
 
-**Why "resume" needs Audiobookshelf specifically:** Music Assistant's own
-`last_played`/`last_played_desc` ordering has been
-[reported unreliable for Audiobookshelf-backed libraries](https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483)
-by the HA community, so "resume my book" asks Audiobookshelf directly instead
-of trusting MA's metadata. `search` and `list` don't depend on any of this —
-they only read from the already-cached playlist catalog, regardless of
-provider. If you're not on Audiobookshelf, leave `ABS_*` unset; `resume`
-requests will cleanly report "unavailable" instead of guessing.
+**How "resume" avoids Music Assistant's reported last-played bug:** the HA
+community has
+[reported MA's own `last_played`/`last_played_desc` ordering as unreliable](https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483)
+for Audiobookshelf-backed libraries — asking MA to *sort* by last-played via
+that query parameter comes back wrong. Rather than adding a second,
+Audiobookshelf-specific connection to work around that, `resume` reuses the
+same `music/audiobooks/library_items` call the catalog already trusts and
+does the "in progress, most recent" filtering and sorting itself in Python,
+avoiding MA's specific `order_by` query path. This assumes the per-item
+progress fields Music Assistant returns (`resume_position_ms`,
+`fully_played`, `last_played`) are themselves accurate even though sorting
+by them server-side isn't — not confirmed from here. **Check your own
+server's response before relying on this**: Music Assistant 2.7.0+ exposes
+live API docs at `http://your-ma-host:8095/api-docs` (or
+`https://beta.music-assistant.io/api/` for beta versions) — look at what
+`music/audiobooks/library_items` actually returns and adjust the field
+names in `ma_client.fetch_in_progress_audiobooks` if they don't match.
 
 ## API
 
@@ -158,7 +164,7 @@ Always returns the same envelope shape:
 | `not_found` | Nothing close enough, and the phrase itself suggests a book was meant | absent |
 | `passthrough` | No match, and nothing in the phrase suggests a book was meant either (`handled: false`, `speech: ""`) — see below | absent |
 | `info` | Response to "what books do I have" | absent |
-| `unavailable` | Catalog empty, or (for resume) Audiobookshelf unreachable/unconfigured | absent |
+| `unavailable` | Catalog empty, or (for resume) Music Assistant unreachable | absent |
 
 `speech` is always present and always safe to speak verbatim. `media` is
 present if and only if `outcome == "play"` — that's the only structural check
@@ -290,8 +296,7 @@ matcher/
   core.py              # pure matching logic (filler stripping, scoring, tie-breaking)
   responses.py         # spoken-response phrasing for every /v1/assist outcome
   catalog.py           # title normalization, series/alias data
-  ma_client.py         # minimal Music Assistant API client (catalog fetch)
-  absclient.py         # minimal Audiobookshelf API client (in-progress lookup)
+  ma_client.py         # minimal Music Assistant API client (catalog fetch, in-progress lookup)
   tests/               # pytest suite for core.py
   Dockerfile
   docker-compose.yml
