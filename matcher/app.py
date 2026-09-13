@@ -186,6 +186,18 @@ _RESUME_PHRASES = (
     "resume", "continue", "where i left", "where was i",
     "was i listening", "was i reading",
 )
+# The HA trigger's "play/read/listen to ..." pattern matches any request
+# starting with those verbs, not just books (see README) — so a search that
+# comes up empty is ambiguous: a real book request that missed, or a non-book
+# request ("play Taylor Swift") that should never have landed here. Whether
+# the utterance names a book-ish noun at all is the cheapest signal for
+# telling those apart — not proof, but enough to avoid confidently telling
+# someone "I couldn't find that book" when they never asked for one.
+_BOOK_SIGNAL_WORDS = {"book", "audiobook", "story", "chapter"}
+
+
+def _mentions_book(utterance: str) -> bool:
+    return bool(set(utterance.lower().split()) & _BOOK_SIGNAL_WORDS)
 
 
 def _classify_intent(utterance: str, hint: Optional[str]) -> str:
@@ -263,9 +275,14 @@ async def assist(req: AssistRequest):
     if not catalog:
         return _envelope("unavailable", responses.unavailable(), debug=debug_base)
     result = core.resolve(req.utterance, catalog, mode="search")
-    return _envelope_from_match_result(
-        result, intent, resume=False, debug={**debug_base, "catalog_size": len(catalog)},
-    )
+    debug = {**debug_base, "catalog_size": len(catalog)}
+    if result == {"error": "no_match"} and not _mentions_book(req.utterance):
+        # No match, and nothing in the phrase even suggests a book was
+        # meant — likely a non-book "play ___" request that the HA trigger
+        # over-broadly caught. Stay silent instead of speaking a "couldn't
+        # find that book" apology for a request that was never about a book.
+        return _envelope("passthrough", "", handled=False, debug={**debug, "reason": "no book-signal word"})
+    return _envelope_from_match_result(result, intent, resume=False, debug=debug)
 
 
 @app.get("/health")

@@ -135,13 +135,26 @@ Always returns the same envelope shape:
 |---|---|---|
 | `play` | Confident match (or resume target) | present |
 | `clarify` | A couple of close ties — `speech` already phrases the question, `options` holds the raw titles/uris | absent |
-| `not_found` | Nothing close enough, or nothing in progress to resume | absent |
+| `not_found` | Nothing close enough, and the phrase itself suggests a book was meant | absent |
+| `passthrough` | No match, and nothing in the phrase suggests a book was meant either (`handled: false`, `speech: ""`) — see below | absent |
 | `info` | Response to "what books do I have" | absent |
 | `unavailable` | Catalog empty, or (for resume) Audiobookshelf unreachable/unconfigured | absent |
 
 `speech` is always present and always safe to speak verbatim. `media` is
 present if and only if `outcome == "play"` — that's the only structural check
 the blueprint needs to make.
+
+**Why `passthrough` exists:** the default `search_commands` trigger matches
+any "play/read/listen to ..." phrase, including non-book ones like "play
+Taylor Swift" (see the known trade-off above). Once that reaches the
+service, a plain no-match would speak "I couldn't find that book" — a
+confusing answer to someone who never asked for one. The service checks
+whether the utterance contains a book-ish word ("book," "audiobook,"
+"story," "chapter") before deciding: contains one → `not_found` (apologize,
+a real book request just missed); doesn't → `passthrough` (stay silent).
+It's a cheap heuristic, not a fix for the underlying trigger over-match —
+tightening `search_commands` per the note above is still the real fix if
+this comes up often in your household.
 
 **`POST /match`** — the original endpoint, still present for the
 [legacy v1 blueprint](blueprints/legacy/audiobook_voice_handler_v1.yaml) or
