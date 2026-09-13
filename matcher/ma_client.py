@@ -39,34 +39,35 @@ async def fetch_full_library() -> list[dict]:
     return result if isinstance(result, list) else []
 
 
-async def fetch_in_progress_audiobooks(limit: int = 10) -> list[dict]:
-    """Audiobooks (and podcast episodes — see below) with real, unfinished
-    playback progress, via Music Assistant's own dedicated endpoint for
-    exactly this:
+async def fetch_in_progress_audiobooks(limit: int = 20) -> list[dict]:
+    """Audiobooks with real, unfinished playback progress, via Music
+    Assistant's own dedicated endpoint for exactly this:
     https://www.music-assistant.io/api/#get-in-progress-items-audiobooks-podcast-episodes-
 
     This replaced an earlier version that fetched the full audiobook
     library and filtered/sorted "in progress" client-side, working around a
-    community-reported bug in the generic library query's `order_by`. This
-    dedicated command should already return the correct, ordered list
-    without that workaround — it's what the earlier approach should have
-    used from the start.
+    community-reported bug in the generic library query's `order_by`.
+    Confirmed against a live server's schema (<host>:8095/api-docs/swagger,
+    MA 2.10.2): the `Audiobook` object has no `last_played` field at all —
+    `Track` does, `Audiobook` doesn't — so sorting audiobooks by
+    `last_played_desc` wasn't a subtle bug, it was ordering by a field that
+    doesn't exist for that media type. `fully_played` and
+    `resume_position_ms` are real, confirmed fields on `Audiobook`, and
+    `name`/`uri` match every other MA item already used in this file.
 
-    NOTE: MA's docs describe this as covering audiobooks *and* podcast
-    episodes together, with no `media_type` filter argument shown — so a
-    podcast episode in progress could show up as a resume candidate
-    alongside audiobooks. Not filtered out here since the field MA uses to
-    distinguish them isn't confirmed; check <host>:8095/api-docs if that
-    becomes a problem in practice.
+    The endpoint's own docs describe it as covering audiobooks *and*
+    podcast episodes together; `media_type` is a confirmed field on both
+    (enum value `"audiobook"` vs `"podcast_episode"`), so filtered to
+    audiobooks only — a kids' audiobook player has no reason to offer to
+    resume a podcast.
 
-    VERIFY BEFORE RELYING ON THIS: the command itself is documented, but the
-    per-item shape isn't shown on that page — `catalog.build_catalog()`
-    expects `name`/`uri` per item, matching every other MA endpoint already
-    used in this file, but that's inferred from consistency, not confirmed
-    for this specific command.
+    Not independently confirmed: the exact response envelope for this
+    specific command (a bare list, same as every other endpoint here, is
+    assumed but not shown on the docs page).
     """
     result = await _call("music/in_progress_items", {"limit": limit})
-    return result if isinstance(result, list) else []
+    items = result if isinstance(result, list) else []
+    return [item for item in items if item.get("media_type") == "audiobook"]
 
 
 async def fetch_music_tracks(limit: int = 500) -> list[dict]:
@@ -80,11 +81,12 @@ async def fetch_music_tracks(limit: int = 500) -> list[dict]:
     without this endpoint, just means the music fallback in /v1/assist has
     nothing to fall back to, not a broken deployment.
 
-    VERIFY BEFORE RELYING ON THIS: `music/tracks/library_items` mirrors the
-    naming convention `music/audiobooks/library_items` already uses, but
-    isn't independently confirmed against a live server from here. Check a
-    real response shape (particularly the `artists` field catalog.py reads)
-    against <host>:8095/api-docs/swagger.
+    Confirmed against a live server (<host>:8095/api-docs, MA 2.10.2): the
+    command is real (listed in the Commands Reference under "Music"), and
+    the `Track` schema has an `artists` field (list of `Artist`/
+    `ItemMapping` objects, each with a `name`) matching what `catalog.py`
+    reads. The `{limit, summary}` args mirror `music/audiobooks/library_items`
+    by convention, not independently confirmed for this specific command.
     """
     result = await _call(
         "music/tracks/library_items",

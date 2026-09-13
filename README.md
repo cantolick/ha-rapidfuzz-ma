@@ -111,29 +111,30 @@ track's `artists` field the same way it treats an audiobook's `authors`
 field, so there's no separate music-matching code path to maintain. This is
 scoped to Music Assistant's `track` media type specifically, which is
 structurally separate from `audiobook` in MA's data model — an
-Audiobookshelf-backed library shouldn't be reachable from this fallback at
-all, though that's worth confirming against your own instance (see
-`ma_client.fetch_music_tracks`) before relying on it. The book catalog is
-always tried first; music is only consulted when the book search comes up
-empty.
+Audiobookshelf-backed library isn't reachable from this fallback. Confirmed
+against a live server's schema (`<host>:8095/api-docs`, MA 2.10.2): `Track`
+has the `artists` field this relies on, and `music/tracks/library_items` is
+a real, listed command. The book catalog is always tried first; music is
+only consulted when the book search comes up empty.
 
 **How "resume" finds what's in progress:** Music Assistant has a
 [dedicated endpoint for exactly this](https://www.music-assistant.io/api/#get-in-progress-items-audiobooks-podcast-episodes-),
 `music/in_progress_items` — a purpose-built "what's in progress" query, not
 the generic library listing with an `order_by` sort the HA community has
 [reported unreliable for Audiobookshelf-backed libraries](https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483)
-in an earlier version of this project. No second, Audiobookshelf-specific
-connection needed — `resume` goes through the same Music Assistant
-connection as everything else here. One thing to know: MA's docs describe
-this endpoint as covering audiobooks *and* podcast episodes together, so a
-podcast in progress could in principle show up as a resume candidate too.
-**Check your own server's response before relying on this in production**:
-Music Assistant 2.7.0+ exposes live API docs at
-`http://your-ma-host:8095/api-docs` (or `https://beta.music-assistant.io/api/`
-for beta versions) — confirm the per-item shape (`ma_client.fetch_in_progress_audiobooks`
-expects `name`/`uri`, matching every other endpoint already used in this
-file) and whether audiobooks vs. podcast episodes can be told apart if that
-matters for your library.
+in an earlier version of this project. Confirmed against the same live
+schema: `Audiobook` has no `last_played` field at all (`Track` does,
+`Audiobook` doesn't) — so that community-reported bug wasn't a subtle
+sorting issue, it was ordering by a field that doesn't exist for that media
+type. `fully_played` and `resume_position_ms` are real, confirmed fields on
+`Audiobook`, and `media_type` (confirmed enum: `audiobook` vs.
+`podcast_episode`) is used to filter out in-progress podcasts, since MA's
+docs describe this endpoint as covering both together. No second,
+Audiobookshelf-specific connection needed — `resume` goes through the same
+Music Assistant connection as everything else here. Music Assistant 2.7.0+
+exposes these live schemas yourself at `http://your-ma-host:8095/api-docs`
+(or `https://beta.music-assistant.io/api/` for beta versions) if you want
+to verify any of this against your own server.
 
 ## API
 
