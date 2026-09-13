@@ -15,3 +15,13 @@ RAW_BOOKS = [
 
 def make_catalog():
     return build_catalog(RAW_BOOKS)
+
+
+RAW_TRACKS = [
+    {"name": "Shake It Off", "uri": "music://track1", "artists": ["Taylor Swift"]},
+    {"name": "Blank Space", "uri": "music://track2", "artists": ["Taylor Swift"]},
+]
+
+
+def make_music_catalog():
+    return build_catalog(RAW_TRACKS)

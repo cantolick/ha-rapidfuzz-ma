@@ -37,3 +37,22 @@ async def fetch_full_library() -> list[dict]:
         {"limit": 500, "summary": False},
     )
     return result if isinstance(result, list) else []
+
+
+async def fetch_music_tracks(limit: int = 500) -> list[dict]:
+    """All tracks across whatever music providers are configured in Music
+    Assistant (Apple Music, Spotify, etc.) — a different media type than
+    audiobooks in MA's data model, not just a differently-filtered view of
+    the same list, so this should never surface Audiobookshelf content.
+
+    VERIFY BEFORE RELYING ON THIS: `music/tracks/library_items` mirrors the
+    naming convention `music/audiobooks/library_items` already uses, but
+    isn't independently confirmed against a live server from here. Check a
+    real response shape (particularly the `artists` field catalog.py reads
+    below) before turning MUSIC_ENABLED on.
+    """
+    result = await _call(
+        "music/tracks/library_items",
+        {"limit": limit, "summary": False},
+    )
+    return result if isinstance(result, list) else []

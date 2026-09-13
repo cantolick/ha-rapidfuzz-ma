@@ -23,6 +23,7 @@ services:
       ABS_URL: ${ABS_URL:-}
       ABS_TOKEN: ${ABS_TOKEN:-}
       ABS_INSTANCE_ID: ${ABS_INSTANCE_ID:-}
+      MUSIC_ENABLED: ${MUSIC_ENABLED:-false}
     volumes:
       - audiobook-matcher-cache:/data
 

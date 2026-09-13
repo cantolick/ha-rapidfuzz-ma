@@ -20,6 +20,7 @@ services:
       ABS_URL: ${ABS_URL:-}
       ABS_TOKEN: ${ABS_TOKEN:-}
       ABS_INSTANCE_ID: ${ABS_INSTANCE_ID:-}
+      MUSIC_ENABLED: ${MUSIC_ENABLED:-false}
     volumes:
       # Persists the last successfully-fetched catalog across container
       # restarts/recreates, so a container coming up before Music Assistant

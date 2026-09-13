@@ -5,11 +5,13 @@ core.py since it's about how to *phrase* a no-match, not how to *find* one.
 import asyncio
 
 import app
-from fixtures import make_catalog
+from fixtures import make_catalog, make_music_catalog
 
 
-def _assist(utterance, hint=None):
+def _assist(utterance, hint=None, with_music=False):
     app._catalogs = {app.FULL_LIBRARY_KEY: make_catalog()}
+    if with_music:
+        app._catalogs[app.MUSIC_CATALOG_KEY] = make_music_catalog()
     app._catalogs_stale = False
     return asyncio.run(app.assist(app.AssistRequest(utterance=utterance, hint=hint)))
 
@@ -48,3 +50,35 @@ def test_list_intent_returns_info():
 def test_resume_without_audiobookshelf_configured_is_unavailable():
     result = _assist("resume my audiobook", hint="resume")
     assert result["outcome"] == "unavailable"
+
+
+def test_non_book_request_without_music_catalog_is_still_passthrough():
+    # Regression guard: no music catalog configured at all should behave
+    # exactly like before the music fallback existed.
+    result = _assist("play taylor swift", hint="search", with_music=False)
+    assert result["outcome"] == "passthrough"
+
+
+def test_non_book_request_falls_back_to_music_catalog_when_configured():
+    # Two Taylor Swift tracks in the fixture catalog -> an artist-only
+    # request can't pick one, so this should clarify, not passthrough or
+    # crash. The key assertion is *not* passthrough: the music catalog was
+    # actually consulted instead of giving up silently.
+    result = _assist("play taylor swift", hint="search", with_music=True)
+    assert result["outcome"] == "clarify"
+    titles = {o["title"] for o in result["options"]}
+    assert titles == {"Shake It Off", "Blank Space"}
+
+
+def test_specific_track_title_plays_from_music_catalog():
+    result = _assist("play shake it off", hint="search", with_music=True)
+    assert result["outcome"] == "play"
+    assert result["media"]["title"] == "Shake It Off"
+
+
+def test_book_request_never_touches_music_catalog():
+    # A real book match should win outright — music fallback only kicks in
+    # after the book catalog comes up empty.
+    result = _assist("play the wimpy kid book", hint="search", with_music=True)
+    assert result["outcome"] == "play"
+    assert result["media"]["title"] == "Diary of a Wimpy Kid"

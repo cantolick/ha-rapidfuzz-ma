@@ -93,7 +93,12 @@ def _metadata_aliases(book: dict) -> dict[str, list[str]]:
         metadata = {}
 
     fields = {
-        "authors": book.get("authors"),
+        # "authors" doubles as the music-track artist field — MA's audiobook
+        # items expose "authors", its track items expose "artists"; both
+        # feed the same searchable_metadata bucket so "a book by Jeff
+        # Kinney" and "a song by Taylor Swift" resolve through identical,
+        # already-tested matching logic instead of two parallel code paths.
+        "authors": book.get("authors") or book.get("artists"),
         "narrators": book.get("narrators"),
         "collections": metadata.get("collections"),
         "performers": metadata.get("performers"),

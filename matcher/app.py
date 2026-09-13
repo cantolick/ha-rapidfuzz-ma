@@ -36,6 +36,13 @@ except json.JSONDecodeError as e:
 
 FULL_LIBRARY_KEY = "__all__"  # used instead of None so the cache file (plain
 # JSON, string keys only) round-trips without special-casing
+MUSIC_CATALOG_KEY = "__music__"
+
+# Off by default — most deployments of this project are audiobook-only (see
+# README), and fetching/caching a whole music library is unnecessary work
+# for them. Turn on once you've verified fetch_music_tracks() against your
+# own MA instance (see ma_client.py).
+MUSIC_ENABLED = os.environ.get("MUSIC_ENABLED", "").lower() in ("1", "true", "yes")
 
 CACHE_PATH = Path(os.environ.get("CACHE_PATH", "/data/catalog_cache.json"))
 STARTUP_RETRY_ATTEMPTS = 3
@@ -59,6 +66,8 @@ async def _fetch_all_catalogs() -> dict:
                     raw_books.append(b)
         catalogs[name] = build_catalog(raw_books)
     catalogs[FULL_LIBRARY_KEY] = build_catalog(await ma_client.fetch_full_library())
+    if MUSIC_ENABLED:
+        catalogs[MUSIC_CATALOG_KEY] = build_catalog(await ma_client.fetch_music_tracks())
     return catalogs
 
 
@@ -279,8 +288,14 @@ async def assist(req: AssistRequest):
     if result == {"error": "no_match"} and not _mentions_book(req.utterance):
         # No match, and nothing in the phrase even suggests a book was
         # meant — likely a non-book "play ___" request that the HA trigger
-        # over-broadly caught. Stay silent instead of speaking a "couldn't
-        # find that book" apology for a request that was never about a book.
+        # over-broadly caught (e.g. "play Taylor Swift"). Try the music
+        # catalog, if one's configured, before giving up silently.
+        music_catalog = _catalogs.get(MUSIC_CATALOG_KEY)
+        if music_catalog:
+            music_result = core.resolve(req.utterance, music_catalog, mode="search")
+            music_debug = {**debug_base, "catalog_size": len(music_catalog), "catalog": "music"}
+            if music_result != {"error": "no_match"}:
+                return _envelope_from_match_result(music_result, intent, resume=False, debug=music_debug)
         return _envelope("passthrough", "", handled=False, debug={**debug, "reason": "no book-signal word"})
     return _envelope_from_match_result(result, intent, resume=False, debug=debug)
 
