@@ -5,7 +5,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY catalog.py ma_client.py app.py ./
+COPY catalog.py core.py ma_client.py absclient.py responses.py app.py ./
 
 EXPOSE 8010
 HEALTHCHECK --interval=30s --timeout=3s CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8010/health')" || exit 1

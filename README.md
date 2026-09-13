@@ -14,19 +14,32 @@ story of that pivot and why](https://claude.ai/code/artifact/28beb3fd-6226-4218-
 ## How it works
 
 ```
-Voice Preview → HA script → this service → Music Assistant → speaker
+Voice Preview → HA automation (blueprint) → this service → Music Assistant → speaker
 ```
 
-1. Home Assistant sends `{ utterance, playlist, mode }` to this service.
-2. The service fetches and caches Music Assistant playlists **itself**, at
+1. Home Assistant's conversation trigger only fires on book/audiobook
+   phrasings (see [Home Assistant Blueprint](#home-assistant-blueprint) below)
+   — everything else the satellite hears falls straight through to Home
+   Assistant's normal Assist pipeline, untouched.
+2. For a matched phrase, HA sends one request to this service's `/v1/assist`
+   endpoint: `{ utterance, hint, playlist }`.
+3. The service fetches and caches Music Assistant playlists **itself**, at
    startup — Home Assistant never needs to pass a book list at all.
-3. `rapidfuzz` matches the utterance against the cached catalog. Series names
+4. `rapidfuzz` matches the utterance against the cached catalog. Series names
    ("harry potter"), explicit book numbers ("book 2," "the second one"), and
    character/series aliases that don't literally appear in a title ("narnia" →
    *The Lion, the Witch, and the Wardrobe*) are all handled without an LLM.
-4. A confident single match plays directly. A handful of close candidates come
+   `rapidfuzz` is what decides *which* book a fuzzy phrase resolves to — that
+   part doesn't change no matter how the request reaches the service or how
+   playback gets triggered.
+5. A confident single match plays directly. A handful of close candidates come
    back as a short disambiguation list instead of a guess. Nothing close enough
-   returns a clean no-match — declining beats confidently playing the wrong book.
+   returns a clean no-match — declining beats confidently playing the wrong
+   book. The service also returns ready-to-speak text for every outcome; HA
+   speaks it via `set_conversation_response` if `speech_enabled` is on.
+6. HA plays the result using the native `music_assistant.play_media` action,
+   targeted at whichever Music-Assistant-backed player you picked when you set
+   up the automation.
 
 ## Quick start
 
@@ -38,7 +51,8 @@ docker compose up -d --build
 
 **Or pull the pre-built image instead of building from source** — a GitHub
 Actions workflow publishes `matcher/` to GitHub Container Registry on every
-push, so a deploy target (a NAS, for example) never needs the source at all:
+push (after the test suite passes), so a deploy target (a NAS, for example)
+never needs the source at all:
 
 ```bash
 cd matcher
@@ -47,9 +61,9 @@ docker compose -f docker-compose.nas.yml up -d
 ```
 
 ```bash
-curl -X POST http://localhost:8010/match \
+curl -X POST http://localhost:8010/v1/assist \
   -H "Content-Type: application/json" \
-  -d '{"utterance": "play the wimpy kid book", "playlist": "kids", "mode": "search"}'
+  -d '{"utterance": "play the wimpy kid book", "playlist": "kids"}'
 ```
 
 ## Configuration
@@ -63,6 +77,9 @@ including for a pulled prebuilt image (see `.env.example`):
 | `MA_TOKEN` | A Music Assistant long-lived API token |
 | `PLAYLIST_SOURCES_JSON` | JSON object mapping a playlist name to the MA playlist item_id(s) it's built from |
 | `CACHE_PATH` | Where the last-successful catalog is cached (default `/data/catalog_cache.json`) |
+| `ABS_URL` | Audiobookshelf base URL — only needed for the "resume" intent, see below |
+| `ABS_TOKEN` | Audiobookshelf API token — only needed for "resume" |
+| `ABS_INSTANCE_ID` | Audiobookshelf provider instance id, as Music Assistant knows it — only needed for "resume" |
 
 `PLAYLIST_SOURCES_JSON` example:
 ```json
@@ -80,9 +97,55 @@ then falls back to the last cached catalog rather than crashing or serving
 nothing. `/health` reports `"stale": true` when it's running on that cache
 instead of a fresh fetch. `POST /refresh` re-fetches on demand.
 
+**Why "resume" needs Audiobookshelf specifically:** Music Assistant's own
+`last_played`/`last_played_desc` ordering has been
+[reported unreliable for Audiobookshelf-backed libraries](https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483)
+by the HA community, so "resume my book" asks Audiobookshelf directly instead
+of trusting MA's metadata. `search` and `list` don't depend on any of this —
+they only read from the already-cached playlist catalog, regardless of
+provider. If you're not on Audiobookshelf, leave `ABS_*` unset; `resume`
+requests will cleanly report "unavailable" instead of guessing.
+
 ## API
 
-**`POST /match`**
+**`POST /v1/assist`** — the current endpoint; what the v2 blueprint calls.
+```json
+{ "utterance": "play harry potter book 2", "hint": "search", "playlist": "kids" }
+```
+`hint` is the HA trigger id (`search` / `resume` / `list`) if you have one —
+advisory only. The service re-classifies from the utterance text itself, so
+there's one source of truth for "what kind of request is this," not one copy
+in the HA blueprint's trigger patterns and a second one here.
+
+Always returns the same envelope shape:
+```json
+{
+  "schema": 1,
+  "outcome": "play",
+  "handled": true,
+  "speech": "Playing Harry Potter and the Chamber of Secrets.",
+  "media": { "uri": "...", "title": "...", "enqueue": "replace" },
+  "options": [],
+  "continue_conversation": false,
+  "debug": { "intent": "search", "catalog_size": 84, "stale": false }
+}
+```
+
+| `outcome` | Meaning | `media` |
+|---|---|---|
+| `play` | Confident match (or resume target) | present |
+| `clarify` | A couple of close ties — `speech` already phrases the question, `options` holds the raw titles/uris | absent |
+| `not_found` | Nothing close enough, or nothing in progress to resume | absent |
+| `info` | Response to "what books do I have" | absent |
+| `unavailable` | Catalog empty, or (for resume) Audiobookshelf unreachable/unconfigured | absent |
+
+`speech` is always present and always safe to speak verbatim. `media` is
+present if and only if `outcome == "play"` — that's the only structural check
+the blueprint needs to make.
+
+**`POST /match`** — the original endpoint, still present for the
+[legacy v1 blueprint](blueprints/legacy/audiobook_voice_handler_v1.yaml) or
+any direct integration built against it.
 ```json
 { "utterance": "play harry potter book 2", "playlist": "kids", "mode": "search" }
 ```
@@ -107,25 +170,41 @@ book," "next chapter." Anything else the satellite hears (lights, timers,
 weather, general chat) isn't matched by this automation at all, so it falls
 straight through to Home Assistant's normal Assist pipeline — including Nabu
 Casa Cloud speech-to-text/text-to-speech and whatever conversation agent you
-already have configured — completely unaffected by this blueprint. Only the
-recognized book/audiobook phrasings get routed to the rapidfuzz matcher.
+already have configured — completely unaffected by this blueprint.
 
-One trade-off to know about: the "play/read/listen to ..." trigger matches
-any request starting with those verbs, so "play some music" or "play Taylor
-Swift" on that device also goes to the matcher instead of Nabu Casa's normal
-media search, and will likely come back as a no-match. Fine if the satellite
-is only ever asked for books; otherwise tighten that trigger's command list
-to require "book" or "story" in the phrase.
+The "play/read/listen to ..." trigger is a blueprint input (`search_commands`)
+specifically because it's the one prone to false positives — the default
+matches any request starting with those verbs, so "play some music" also goes
+to the matcher and will likely come back as `not_found`. Tighten it yourself
+(e.g. `"(play|read) [me] [the] {utterance} (book|story)"`) if that's a problem
+in your household; no YAML editing required, just change the input.
 
-**Spoken responses are currently disabled by default.** Some Home Assistant
-Voice Preview devices on ESPHome 26.6.0/26.6.5 crash when playing any TTS
-audio — an upstream firmware regression
+Setup asks for four things:
+- **Voice Satellite Device** — which device this automation listens to.
+- **Music Assistant Player** — the media_player entity to play on and control
+  (pause, next chapter). Filtered to Music-Assistant-backed players only.
+  ⚠️ **If pause/next chapter don't work**, you likely need a *different*
+  entity than you'd expect: a Voice PE's own native media_player is not the
+  same entity Music Assistant plays through, and picking the wrong one will
+  silently do nothing (see [this thread](https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483)
+  for the exact trap). Check Settings → Devices & Services → Music Assistant
+  → the relevant player entity, and confirm it's the one showing live
+  playback state (title, position) before assuming the automation is broken.
+- **Playlist Name** — which `PLAYLIST_SOURCES_JSON` key to search.
+- **Enable Spoken Responses** — off by default; see below.
+
+**Spoken responses are off by default.** Some Home Assistant Voice Preview
+devices on ESPHome 26.6.0/26.6.5 crash when playing any TTS audio — an
+upstream firmware regression
 ([esphome/home-assistant-voice-pe#613](https://github.com/esphome/home-assistant-voice-pe/issues/613)),
-not something specific to this project. Until that's fixed (or your device
-is downgraded to ESPHome 2026.5.3), the blueprint runs silently: it plays a
-match or does nothing, with no spoken confirmation, error message, or "did
-you mean" prompt. The `tts_target` input is still there, ready for when TTS
-calls get re-added.
+not something specific to this project. There's also an open
+[Home Assistant core issue](https://github.com/home-assistant/core/issues/138166)
+where trigger-scoped `variables:` can interact badly with
+`set_conversation_response` — test on one device before flipping
+`speech_enabled` on fleet-wide. Once it's safe to enable, match confirmations,
+disambiguation prompts, no-match apologies, and the book-list summary are all
+spoken through the same Assist pipeline (Nabu Casa Cloud TTS, if that's what
+you use) — no separate TTS integration needed.
 
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fraw.githubusercontent.com%2Fcantolick%2Fha-rapidfuzz-ma%2Fmain%2Fblueprints%2Faudiobook_voice_handler.yaml)
 
@@ -135,29 +214,60 @@ paste:
 https://raw.githubusercontent.com/cantolick/ha-rapidfuzz-ma/main/blueprints/audiobook_voice_handler.yaml
 ```
 
-**Prerequisite**: three `rest_command` services need to already exist in your
-Home Assistant config — `ma_in_progress_audiobooks`, `ma_play_audiobook`, and
-`book_match` (pointed at wherever this service runs). See `rest_commands.yaml`
-in a Home Assistant config repo for the expected shape, or write your own —
-the blueprint just calls them by name.
+**Prerequisite**: one `rest_command` service needs to already exist in your
+Home Assistant config — `book_assist`, pointed at your running matcher
+instance's `/v1/assist` endpoint. See [`examples/rest_commands.yaml`](examples/rest_commands.yaml)
+for the exact shape to copy into your config.
 
-Once imported, creating an automation from the blueprint asks for 5 things —
-which satellite device it listens to, which entity to speak responses
-through, which entity actually controls playback, the Music Assistant queue
-ID, and which playlist name to search. Repeat per child/device — that's the
-whole "multi-kid" story, no YAML copy-pasting required.
+### Migrating from v1
+
+The v2 blueprint is a real rewrite, not a drop-in — re-importing it over an
+existing v1 automation needs a few minutes of reconfiguration, not just a
+click:
+- `queue_id` and `control_target` are gone; there's one `ma_player` input now.
+- The required `rest_command` changes from three (`book_match`,
+  `ma_in_progress_audiobooks`, `ma_play_audiobook`) to one (`book_assist`).
+- `tts_target` is gone entirely — spoken responses go through
+  `set_conversation_response` instead of a dedicated announcement target.
+
+If you'd rather not migrate yet, [`blueprints/legacy/audiobook_voice_handler_v1.yaml`](blueprints/legacy/audiobook_voice_handler_v1.yaml)
+is the exact frozen v1 blueprint and keeps working against `/match` as before.
+
+## Testing
+
+```bash
+cd matcher
+pip install -r requirements-dev.txt
+pytest tests/ -v
+```
+
+`matcher/tests/` covers the pure matching core (`core.py`) against a small
+in-memory catalog — filler stripping, series/book-number tie-breaking,
+metadata-based author lookups, disambiguation, and the resume-with-no-title
+fallback — with no FastAPI app or Music Assistant connection required. CI
+runs this suite on every push to `matcher/**` and blocks the Docker publish
+step if it fails.
 
 ## Project layout
 
 ```
 matcher/
-  app.py            # FastAPI service, matching logic
-  catalog.py         # title normalization, series/alias data
-  ma_client.py       # minimal Music Assistant API client
+  app.py               # FastAPI service — request handling, intent classification
+  core.py              # pure matching logic (filler stripping, scoring, tie-breaking)
+  responses.py         # spoken-response phrasing for every /v1/assist outcome
+  catalog.py           # title normalization, series/alias data
+  ma_client.py         # minimal Music Assistant API client (catalog fetch)
+  absclient.py         # minimal Audiobookshelf API client (in-progress lookup)
+  tests/               # pytest suite for core.py
   Dockerfile
   docker-compose.yml
+  docker-compose.nas.yml
 blueprints/
-  audiobook_voice_handler.yaml   # importable HA automation blueprint
+  audiobook_voice_handler.yaml          # current (v2) importable HA automation blueprint
+  legacy/
+    audiobook_voice_handler_v1.yaml     # frozen v1, still works against /match
+examples/
+  rest_commands.yaml   # copy-paste rest_command config for either blueprint version
 ```
 
 Home Assistant automations/scripts and any environment-specific config live

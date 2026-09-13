@@ -19,6 +19,10 @@ services:
       MA_URL: ${MA_URL}
       MA_TOKEN: ${MA_TOKEN}
       PLAYLIST_SOURCES_JSON: ${PLAYLIST_SOURCES_JSON}
+      # Only needed for the "resume" intent — see .env.example.
+      ABS_URL: ${ABS_URL:-}
+      ABS_TOKEN: ${ABS_TOKEN:-}
+      ABS_INSTANCE_ID: ${ABS_INSTANCE_ID:-}
     volumes:
       - audiobook-matcher-cache:/data
 

@@ -28,6 +28,10 @@ async def fetch_playlist_tracks(item_id: str) -> list[dict]:
 
 
 async def fetch_full_library() -> list[dict]:
+    # NOTE: capped at 500 items with no pagination — a library bigger than
+    # that silently truncates. Fine for a curated kids' playlist; revisit
+    # with an offset loop if this is ever pointed at the full audiobook
+    # library and that library grows past the cap.
     result = await _call(
         "music/audiobooks/library_items",
         {"limit": 500, "summary": False},

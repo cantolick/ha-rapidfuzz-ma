@@ -1,0 +1,62 @@
+# Example rest_commands.yaml for use with blueprints/audiobook_voice_handler.yaml.
+#
+# Copy the block(s) you need into your Home Assistant configuration.yaml (or
+# a packages file) and replace the URL with wherever your matcher instance
+# actually runs. Restart Home Assistant (or reload REST commands) after
+# adding these.
+
+# --- v2 blueprint (blueprints/audiobook_voice_handler.yaml) -----------------
+# Only one rest_command needed: the matcher does its own intent
+# classification, in-progress lookup, and matching, and returns a single
+# small response the blueprint acts on.
+rest_command:
+  book_assist:
+    url: "http://YOUR-MATCHER-HOST:8010/v1/assist"
+    method: POST
+    headers:
+      Content-Type: application/json
+    payload: >-
+      {"utterance": "{{ utterance }}", "hint": "{{ hint }}", "playlist": "{{ playlist }}"}
+    content_type: "application/json; charset=utf-8"
+
+# --- legacy v1 blueprint (blueprints/legacy/audiobook_voice_handler_v1.yaml) -
+# Three rest_commands, since v1 does its own intent routing in YAML and
+# calls Music Assistant directly for two of them. Uncomment if you're still
+# on the legacy blueprint; not needed alongside book_assist above.
+#
+#   book_match:
+#     url: "http://YOUR-MATCHER-HOST:8010/match"
+#     method: POST
+#     headers:
+#       Content-Type: application/json
+#     payload: >-
+#       {"utterance": "{{ utterance }}", "playlist": "{{ playlist | default('') }}",
+#        "books_json": {{ books_json | default('null') }}, "mode": "{{ mode }}"}
+#     content_type: "application/json; charset=utf-8"
+#
+#   ma_in_progress_audiobooks:
+#     url: "http://YOUR-MUSIC-ASSISTANT-HOST:8095/api"
+#     method: POST
+#     headers:
+#       Authorization: "Bearer YOUR-MA-TOKEN"
+#       Content-Type: application/json
+#     payload: >-
+#       {"command": "music/audiobooks/library_items", "args": {"limit": 50, "summary": false}}
+#     content_type: "application/json; charset=utf-8"
+#     # NOTE: this is a best-effort placeholder, not a confirmed "in
+#     # progress, most-recent-first" query — Music Assistant's own
+#     # last_played ordering has been reported unreliable for
+#     # Audiobookshelf-backed libraries (see the v2 blueprint's
+#     # description). The v2 blueprint's book_assist doesn't have this
+#     # problem — it asks Audiobookshelf directly instead. Migrating is
+#     # the actual fix, not tuning this query further.
+#
+#   ma_play_audiobook:
+#     url: "http://YOUR-MUSIC-ASSISTANT-HOST:8095/api"
+#     method: POST
+#     headers:
+#       Authorization: "Bearer YOUR-MA-TOKEN"
+#       Content-Type: application/json
+#     payload: >-
+#       {"command": "player_queues/play_media", "args": {"queue_id": "{{ queue_id }}", "media": "{{ uri }}"}}
+#     content_type: "application/json; charset=utf-8"
