@@ -114,23 +114,23 @@ confirming against your own instance (see `ma_client.fetch_music_tracks`)
 before relying on it. The book catalog is always tried first; music is only
 consulted when the book search comes up empty.
 
-**How "resume" avoids Music Assistant's reported last-played bug:** the HA
-community has
-[reported MA's own `last_played`/`last_played_desc` ordering as unreliable](https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483)
-for Audiobookshelf-backed libraries — asking MA to *sort* by last-played via
-that query parameter comes back wrong. Rather than adding a second,
-Audiobookshelf-specific connection to work around that, `resume` reuses the
-same `music/audiobooks/library_items` call the catalog already trusts and
-does the "in progress, most recent" filtering and sorting itself in Python,
-avoiding MA's specific `order_by` query path. This assumes the per-item
-progress fields Music Assistant returns (`resume_position_ms`,
-`fully_played`, `last_played`) are themselves accurate even though sorting
-by them server-side isn't — not confirmed from here. **Check your own
-server's response before relying on this**: Music Assistant 2.7.0+ exposes
-live API docs at `http://your-ma-host:8095/api-docs` (or
-`https://beta.music-assistant.io/api/` for beta versions) — look at what
-`music/audiobooks/library_items` actually returns and adjust the field
-names in `ma_client.fetch_in_progress_audiobooks` if they don't match.
+**How "resume" finds what's in progress:** Music Assistant has a
+[dedicated endpoint for exactly this](https://www.music-assistant.io/api/#get-in-progress-items-audiobooks-podcast-episodes-),
+`music/in_progress_items` — a purpose-built "what's in progress" query, not
+the generic library listing with an `order_by` sort the HA community has
+[reported unreliable for Audiobookshelf-backed libraries](https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483)
+in an earlier version of this project. No second, Audiobookshelf-specific
+connection needed — `resume` goes through the same Music Assistant
+connection as everything else here. One thing to know: MA's docs describe
+this endpoint as covering audiobooks *and* podcast episodes together, so a
+podcast in progress could in principle show up as a resume candidate too.
+**Check your own server's response before relying on this in production**:
+Music Assistant 2.7.0+ exposes live API docs at
+`http://your-ma-host:8095/api-docs` (or `https://beta.music-assistant.io/api/`
+for beta versions) — confirm the per-item shape (`ma_client.fetch_in_progress_audiobooks`
+expects `name`/`uri`, matching every other endpoint already used in this
+file) and whether audiobooks vs. podcast episodes can be told apart if that
+matters for your library.
 
 ## API
 

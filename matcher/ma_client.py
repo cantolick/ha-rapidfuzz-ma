@@ -39,33 +39,34 @@ async def fetch_full_library() -> list[dict]:
     return result if isinstance(result, list) else []
 
 
-async def fetch_in_progress_audiobooks() -> list[dict]:
-    """Audiobooks with real, unfinished playback progress, most-recent first.
+async def fetch_in_progress_audiobooks(limit: int = 10) -> list[dict]:
+    """Audiobooks (and podcast episodes — see below) with real, unfinished
+    playback progress, via Music Assistant's own dedicated endpoint for
+    exactly this:
+    https://www.music-assistant.io/api/#get-in-progress-items-audiobooks-podcast-episodes-
 
-    Filters and sorts client-side instead of asking Music Assistant to do it
-    via `order_by` — the HA community has reported MA's own `last_played` /
-    `last_played_desc` ordering as unreliable for Audiobookshelf-backed
-    libraries:
-    https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483
+    This replaced an earlier version that fetched the full audiobook
+    library and filtered/sorted "in progress" client-side, working around a
+    community-reported bug in the generic library query's `order_by`. This
+    dedicated command should already return the correct, ordered list
+    without that workaround — it's what the earlier approach should have
+    used from the start.
 
-    That report is about the *query*, not confirmed to be about the
-    underlying per-item field values — so this works around it by reusing
-    the same `music/audiobooks/library_items` call the catalog already
-    trusts, and doing the "in progress, most recent" filtering ourselves.
+    NOTE: MA's docs describe this as covering audiobooks *and* podcast
+    episodes together, with no `media_type` filter argument shown — so a
+    podcast episode in progress could show up as a resume candidate
+    alongside audiobooks. Not filtered out here since the field MA uses to
+    distinguish them isn't confirmed; check <host>:8095/api-docs if that
+    becomes a problem in practice.
 
-    VERIFY BEFORE RELYING ON THIS: if the field names below
-    (`resume_position_ms`, `fully_played`, `last_played`) don't match what
-    your server actually returns, or if those per-item values are
-    themselves inaccurate (not just MA's sort of them), this will still
-    misbehave — check a real response from your own instance first.
+    VERIFY BEFORE RELYING ON THIS: the command itself is documented, but the
+    per-item shape isn't shown on that page — `catalog.build_catalog()`
+    expects `name`/`uri` per item, matching every other MA endpoint already
+    used in this file, but that's inferred from consistency, not confirmed
+    for this specific command.
     """
-    items = await fetch_full_library()
-    in_progress = [
-        b for b in items
-        if not b.get("fully_played") and (b.get("resume_position_ms") or 0) > 0
-    ]
-    in_progress.sort(key=lambda b: b.get("last_played") or "", reverse=True)
-    return in_progress
+    result = await _call("music/in_progress_items", {"limit": limit})
+    return result if isinstance(result, list) else []
 
 
 async def fetch_music_tracks(limit: int = 500) -> list[dict]:
