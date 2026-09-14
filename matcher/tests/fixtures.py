@@ -10,6 +10,8 @@ RAW_BOOKS = [
     {"name": "Harry Potter and the Chamber of Secrets (Book 2)", "uri": "lib://4"},
     {"name": "Percy Jackson and the Lightning Thief", "uri": "lib://5", "authors": ["Rick Riordan"]},
     {"name": "The Hobbit", "uri": "lib://6"},
+    {"name": "The Cay", "uri": "lib://7"},
+    {"name": "The Lion, the Witch, and the Wardrobe (Unabridged) | The Chronicles of Narnia", "uri": "lib://8"},
 ]
 
 

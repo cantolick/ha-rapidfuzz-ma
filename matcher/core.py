@@ -176,12 +176,24 @@ def resolve(
         return {"error": "no_match"}
 
     top_score = results[0][1]
+
+    # A low top score means nothing here actually resembles the query, no
+    # matter how many candidates happen to tie against EACH OTHER. Gate on
+    # confidence before even computing ties, so a single weak match, a
+    # same-series tie, and a bare disambiguation tie are all covered by one
+    # check instead of three separate ones. Found via live testing: "play
+    # taylor swift" against a real catalog scored two completely unrelated
+    # titles into a tie with each other (58-60, both "low") and confidently
+    # asked "did you mean X or Y?" — neither had anything to do with the
+    # query. Offering a choice between candidates that don't resemble the
+    # query is worse than declining.
+    if confidence_label(top_score) == "low":
+        return {"error": "no_match"}
+
     tied = [catalog[idx] for (_text, score, idx) in results if top_score - score <= config.tie_margin]
 
     if len(tied) == 1:
         e = tied[0]
-        if confidence_label(top_score) == "low":
-            return {"error": "no_match"}
         return {"uri": e["uri"], "title": e["title"], "confidence": confidence_label(top_score)}
 
     series_keys = {e["series"] for e in tied}

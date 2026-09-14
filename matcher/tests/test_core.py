@@ -75,6 +75,18 @@ def test_list_summary_empty_catalog():
     assert core.list_summary([]) == "You don't have any audiobooks available right now."
 
 
+def test_low_confidence_tie_declines_instead_of_disambiguating():
+    # Live-testing found: "play taylor swift" against a real catalog scored
+    # two completely unrelated titles into a tie with EACH OTHER (58-60,
+    # both "low" confidence by confidence_label's own scale) and confidently
+    # offered them as "did you mean X or Y?" — neither had anything to do
+    # with the query. A low top score should decline regardless of how many
+    # candidates tied against each other.
+    catalog = make_catalog()
+    result = core.resolve("play taylor swift", catalog)
+    assert result == {"error": "no_match"}
+
+
 def test_metadata_prefilter_no_match_returns_full_catalog_unchanged():
     catalog = make_catalog()
     query, filtered = core.metadata_prefilter("harry potter", catalog)
