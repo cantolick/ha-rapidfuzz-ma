@@ -32,16 +32,19 @@ this relies on, and `music/tracks/library_items` is a real, listed command.
 The book catalog is always tried first; music is only consulted when the
 book search comes up empty.
 
-**Known live-tested gap:** a short, generic non-book query can still
+**Fixed, found via live testing:** a short, generic non-book query used to
 produce a false `clarify` (two unrelated titles tied against each other,
-not against the query) instead of reaching passthrough at all, since
-passthrough's book-signal-word check only runs after a clean `not_found` —
-a spurious tie never gets there. Found via live testing against a real
-67-title catalog ("play taylor swift" → disambiguated between two unrelated
-audiobooks), not caught by the unit test fixture. Not yet fixed — needs a
-deliberate tuning pass, not a quick patch, since raising the score cutoff
-or extending the book-signal check to `clarify` both risk breaking
-legitimate short-title matches ("wimpy kid," "narnia").
+not against the query) instead of reaching passthrough at all — found
+against a real 67-title catalog ("play taylor swift" → disambiguated
+between two unrelated audiobooks, both scoring "low" confidence but tied
+against each other). Root cause was in `core.resolve()`, not the
+passthrough logic itself: the single-match branch already declined
+low-confidence results, but the tied/disambiguation branches never checked
+confidence at all. Fixed by moving the confidence gate up to run once,
+before any tie/series/disambiguation logic, so a single weak match, a
+same-series tie, and a bare multi-way tie are all covered by one check.
+See the regression test in `matcher/tests/test_core.py` using the exact
+real titles/query from live testing.
 
 ### How "resume" finds what's in progress
 
