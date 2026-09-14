@@ -94,47 +94,15 @@ then falls back to the last cached catalog rather than crashing or serving
 nothing. `/health` reports `"stale": true` when it's running on that cache
 instead of a fresh fetch. `POST /refresh` re-fetches on demand.
 
-**Turning "play Taylor Swift" from silence into an actual answer:** a "play
-X" request that doesn't look book-related and doesn't match the book
-catalog would otherwise get a silent `passthrough` (see the outcome table
-below) — better than a wrong-sounding "I couldn't find that book," but it
-still doesn't play the song. The service always attempts to fetch your
-Music Assistant music library (whatever providers you have configured —
-Apple Music, Spotify, etc.) at startup and tries it as a fallback before
-giving up; if you have no music providers configured, or your MA version
-doesn't support the endpoint, that fetch just fails quietly (a warning in
-the logs) and passthrough behaves exactly as before — no separate flag to
-turn on. Artist-only requests ("play Taylor Swift") and track-title
-requests ("play Shake It Off") both work through the exact same matching
-logic already used for audiobook titles and authors — `catalog.py` treats a
-track's `artists` field the same way it treats an audiobook's `authors`
-field, so there's no separate music-matching code path to maintain. This is
-scoped to Music Assistant's `track` media type specifically, which is
-structurally separate from `audiobook` in MA's data model — an
-Audiobookshelf-backed library isn't reachable from this fallback. Confirmed
-against a live server's schema (`<host>:8095/api-docs`, MA 2.10.2): `Track`
-has the `artists` field this relies on, and `music/tracks/library_items` is
-a real, listed command. The book catalog is always tried first; music is
-only consulted when the book search comes up empty.
+**Non-book "play X" requests** (like "play Taylor Swift") get tried against
+a general Music Assistant music library before giving up — see
+[DEVELOPMENT.md](DEVELOPMENT.md#the-general-music-fallback-play-taylor-swift)
+for how that works and a known live-tested gap in it.
 
-**How "resume" finds what's in progress:** Music Assistant has a
-[dedicated endpoint for exactly this](https://www.music-assistant.io/api/#get-in-progress-items-audiobooks-podcast-episodes-),
-`music/in_progress_items` — a purpose-built "what's in progress" query, not
-the generic library listing with an `order_by` sort the HA community has
-[reported unreliable for Audiobookshelf-backed libraries](https://community.home-assistant.io/t/continue-audiobook-from-music-assistant/940483)
-in an earlier version of this project. Confirmed against the same live
-schema: `Audiobook` has no `last_played` field at all (`Track` does,
-`Audiobook` doesn't) — so that community-reported bug wasn't a subtle
-sorting issue, it was ordering by a field that doesn't exist for that media
-type. `fully_played` and `resume_position_ms` are real, confirmed fields on
-`Audiobook`, and `media_type` (confirmed enum: `audiobook` vs.
-`podcast_episode`) is used to filter out in-progress podcasts, since MA's
-docs describe this endpoint as covering both together. No second,
-Audiobookshelf-specific connection needed — `resume` goes through the same
-Music Assistant connection as everything else here. Music Assistant 2.7.0+
-exposes these live schemas yourself at `http://your-ma-host:8095/api-docs`
-(or `https://beta.music-assistant.io/api/` for beta versions) if you want
-to verify any of this against your own server.
+**"Resume my audiobook"** is backed by Music Assistant's own dedicated
+`music/in_progress_items` command, not a workaround or a second connection
+— see [DEVELOPMENT.md](DEVELOPMENT.md#how-resume-finds-whats-in-progress)
+for why, what's confirmed against a live server, and known gaps.
 
 ## API
 
@@ -174,19 +142,8 @@ Always returns the same envelope shape:
 present if and only if `outcome == "play"` — that's the only structural check
 the blueprint needs to make.
 
-**Why `passthrough` exists:** the default `search_commands` trigger matches
-any "play/read/listen to ..." phrase, including non-book ones like "play
-Taylor Swift" (see the known trade-off above). Once that reaches the
-service, a plain no-match would speak "I couldn't find that book" — a
-confusing answer to someone who never asked for one. The service checks
-whether the utterance contains a book-ish word ("book," "audiobook,"
-"story," "chapter") before deciding: contains one → `not_found` (apologize,
-a real book request just missed); doesn't → the music library gets tried
-first (see below), and only falls through to `passthrough` (stay silent) if
-that doesn't find anything either. It's a cheap heuristic, not a fix for
-the underlying
-trigger over-match — tightening `search_commands` per the note above is
-still the real fix if this comes up often in your household.
+Why `passthrough` exists, and a known gap where it doesn't catch everything
+it should yet: [DEVELOPMENT.md](DEVELOPMENT.md#why-passthrough-exists).
 
 **`POST /match`** — the original endpoint, still present for the
 [legacy v1 blueprint](blueprints/legacy/audiobook_voice_handler_v1.yaml) or
@@ -293,41 +250,9 @@ click:
 If you'd rather not migrate yet, [`blueprints/legacy/audiobook_voice_handler_v1.yaml`](blueprints/legacy/audiobook_voice_handler_v1.yaml)
 is the exact frozen v1 blueprint and keeps working against `/match` as before.
 
-## Testing
+## Contributing / developing
 
-```bash
-cd matcher
-pip install -r requirements-dev.txt
-pytest tests/ -v
-```
-
-`matcher/tests/` covers the pure matching core (`core.py`) against a small
-in-memory catalog — filler stripping, series/book-number tie-breaking,
-metadata-based author lookups, disambiguation, and the resume-with-no-title
-fallback — with no FastAPI app or Music Assistant connection required. CI
-runs this suite on every push to `matcher/**` and blocks the Docker publish
-step if it fails.
-
-## Project layout
-
-```
-matcher/
-  app.py               # FastAPI service — request handling, intent classification
-  core.py              # pure matching logic (filler stripping, scoring, tie-breaking)
-  responses.py         # spoken-response phrasing for every /v1/assist outcome
-  catalog.py           # title normalization, series/alias data
-  ma_client.py         # minimal Music Assistant API client (catalog fetch, in-progress lookup)
-  tests/               # pytest suite for core.py
-  Dockerfile
-  docker-compose.yml
-  docker-compose.nas.yml
-blueprints/
-  audiobook_voice_handler.yaml          # current (v2) importable HA automation blueprint
-  legacy/
-    audiobook_voice_handler_v1.yaml     # frozen v1, still works against /match
-examples/
-  rest_commands.yaml   # copy-paste rest_command config for either blueprint version
-```
-
-Home Assistant automations/scripts and any environment-specific config live
-outside this public repo.
+Running the test suite, the project layout, design rationale for specific
+behaviors (the music fallback, resume, `passthrough`), and a running list
+of known open items from live testing all live in
+[DEVELOPMENT.md](DEVELOPMENT.md).
