@@ -93,7 +93,15 @@ def _metadata_aliases(book: dict) -> dict[str, list[str]]:
         metadata = {}
 
     fields = {
-        "authors": book.get("authors"),
+        # "authors" doubles as the music-track artist field — confirmed
+        # against MA's own schema (<host>:8095/api-docs/swagger): Audiobook
+        # has "authors", Track has "artists", both as lists of Artist/
+        # ItemMapping objects with a "name" (which _named_values() below
+        # already handles generically). Both feed the same
+        # searchable_metadata bucket so "a book by Jeff Kinney" and "a song
+        # by Taylor Swift" resolve through identical, already-tested
+        # matching logic instead of two parallel code paths.
+        "authors": book.get("authors") or book.get("artists"),
         "narrators": book.get("narrators"),
         "collections": metadata.get("collections"),
         "performers": metadata.get("performers"),

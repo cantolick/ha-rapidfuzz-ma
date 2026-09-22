@@ -1,5 +1,5 @@
 blueprint:
-  name: Audiobook Voice Handler (local matcher)
+  name: Audiobook Voice Handler (local matcher) v2
   description: >
     Routes voice requests from one Voice Preview / Assist satellite device to
     a local audiobook-matcher service (github.com/cantolick/ha-rapidfuzz-ma),
@@ -8,42 +8,68 @@ blueprint:
     dependency for the matching itself — fuzzy string matching against a
     playlist you curate directly in Music Assistant.
 
-    The conversation trigger below only matches specific book/audiobook
-    request phrasings ("play ...", "read ...", "resume my audiobook", "what
-    books do I have", "pause the book", "next chapter", etc). Anything the
-    satellite hears that doesn't match one of those phrasings is **not**
-    consumed by this automation — Home Assistant's normal Assist pipeline
-    (including Nabu Casa Cloud speech-to-text/text-to-speech and its usual
-    conversation agent) still handles it, so lights, timers, weather, and
-    general conversation keep working exactly as before this blueprint was
-    imported. Only the recognized book/audiobook phrasings get routed to the
-    matcher.
+    **v2 — a real rewrite, not a drop-in upgrade.** If you're importing this
+    over an existing v1 automation, you'll need to reconfigure it: `queue_id`
+    and `control_target` are gone, replaced by one `ma_player` entity picker;
+    the required rest_command changes from three (`book_match`,
+    `ma_in_progress_audiobooks`, `ma_play_audiobook`) to one (`book_assist`,
+    pointed at the matcher's new `/v1/assist` endpoint — see the repo's
+    `examples/rest_commands.yaml`). The frozen v1 blueprint is still available
+    at `blueprints/legacy/audiobook_voice_handler_v1.yaml` if you'd rather not
+    migrate yet.
 
-    **Known trade-off:** the "play/read/listen to/start/put on ..." trigger
-    matches *any* request starting with those verbs, not just audiobooks —
-    "play some music" or "play Taylor Swift" on this device also routes to
-    the matcher (against the curated playlist in `playlist_name`) instead of
-    Nabu Casa's normal media search, and will likely come back as a
-    no-match. Fine if this satellite is only ever asked to play books; if
-    you also want it to handle general music requests via Nabu Casa/Music
-    Assistant directly, tighten the `search` trigger's command list to
-    require "book" or "story" in the phrase (e.g. `"(play|read) [me] [the]
-    {utterance} (book|story)"` or require those words before `{utterance}`).
+    The conversation trigger only matches specific book/audiobook request
+    phrasings ("play ...", "resume my audiobook", "what books do I have",
+    "pause the book", "next chapter"). Anything the satellite hears that
+    doesn't match one of those phrasings is **not** consumed by this
+    automation — Home Assistant's normal Assist pipeline (including Nabu Casa
+    Cloud speech-to-text/text-to-speech and its usual conversation agent)
+    still handles it, so lights, timers, weather, and general conversation
+    keep working exactly as if this automation didn't exist.
 
-    Requires three rest_command services already configured (see the repo's
-    rest_commands.yaml): `ma_in_progress_audiobooks`, `ma_play_audiobook`, and
-    `book_match` (pointed at your running audiobook-matcher instance).
+    **What's actually new in v2, not just refactored:**
+    - Disambiguation is real now — "did you mean X or Y?" gets spoken
+      instead of silently discarded, once `speech_enabled` is on.
+    - "What books do I have" is real now — it speaks the catalog summary
+      instead of no-op'ing.
+    - Resume is backed by a direct Audiobookshelf lookup instead of a
+      hand-built rest_command against Music Assistant's own `last_played`
+      ordering, which the HA community has reported as unreliable for
+      Audiobookshelf-backed libraries.
+    - Playback uses the native `music_assistant.play_media` action instead
+      of hand-rolling Music Assistant's queue API — one `ma_player` input
+      (filtered to Music-Assistant-backed players only) instead of a
+      `queue_id` you had to dig out of MA's API by hand.
 
-    **TTS is intentionally disabled in this version.** Some Home Assistant
-    Voice Preview devices on ESPHome 26.6.0/26.6.5 crash when playing any
-    TTS/Assist URL audio — a firmware regression, not specific to this
-    blueprint (see esphome/home-assistant-voice-pe#613, open/unfixed as of
-    26.6.5, no newer firmware yet). Until that's fixed upstream (or your
-    device is downgraded to ESPHome 2026.5.3), this blueprint runs silently:
-    matches play or don't, with no spoken confirmation, error message, or
-    "did you mean" disambiguation prompt. The `tts_target` input is kept so
-    it's a small, non-breaking change to restore TTS calls once the firmware
-    bug is fixed.
+    **Important — conversation sentence triggers match house-wide, not just
+    on the bound device.** Home Assistant matches sentence triggers against
+    *any* Assist device before checking a trigger's own conditions or
+    falling through to built-in intents — this is confirmed, permanent HA
+    behavior, not something this blueprint can route around. A `search_commands`
+    pattern using verbs also used for other smart-home intents (earlier
+    versions of this default included "start" and "put on") would
+    intercept "start a timer," "start the vacuum," or "put on the hallway
+    lights" from *every* Assist device in the house — the automation's
+    `satellite_device` condition then blocks it from running, but the
+    sentence has already been claimed, so HA just says "Done" and nothing
+    happens, on any device, not only the one this automation is bound to.
+    The default below only uses "play/read/listen to," verbs not
+    meaningfully used for other Assist intents, specifically to avoid this.
+    **Known trade-off that remains:** it still matches non-book "play X"
+    requests like "play some music" on the bound device specifically — see
+    `search_commands` below for how to tighten that further if it comes up.
+
+    **Before turning on `speech_enabled`:** some Voice PE devices crash on
+    ESPHome 26.6.0/26.6.5 when playing any TTS audio (upstream firmware
+    regression, esphome/home-assistant-voice-pe#613) — that's why this
+    defaults to off. There's also an open Home Assistant core issue where
+    trigger-scoped variables can interact badly with
+    `set_conversation_response` (home-assistant/core#138166) — test on one
+    device before enabling fleet-wide.
+
+    Requires one rest_command service already configured (see the repo's
+    `examples/rest_commands.yaml`): `book_assist`, pointed at your running
+    audiobook-matcher instance's `/v1/assist` endpoint.
   domain: automation
   source_url: https://github.com/cantolick/ha-rapidfuzz-ma/blob/main/blueprints/audiobook_voice_handler.yaml
   input:
@@ -56,40 +82,21 @@ blueprint:
             - integration: esphome
             - integration: assist_satellite
 
-    tts_target:
-      name: TTS / Announcement Target
+    ma_player:
+      name: Music Assistant Player
       description: >
-        The media_player entity that would be used for spoken responses —
-        currently unused since TTS is disabled (see blueprint description).
-        Kept as an input so it's a small change to restore TTS once the
-        upstream firmware bug is fixed.
+        The Music Assistant media_player entity to play audiobooks on and
+        control (pause, next chapter). Filtered to Music-Assistant-backed
+        players — if more than one shows up for this device, check which
+        one actually reflects live playback state (title, position); a
+        satellite's own native media_player entity is a different one from
+        the Music-Assistant-managed player and won't work here (see the
+        README's troubleshooting note).
       selector:
         entity:
           filter:
-            - domain: media_player
-
-    control_target:
-      name: Playback Control Target
-      description: >
-        The media_player entity that actually reflects/controls audiobook
-        playback (pause, next chapter) — often a separate Music-Assistant-
-        managed entity from the satellite's own native one. Check which
-        entity shows real playback state (title, position) if unsure.
-      selector:
-        entity:
-          filter:
-            - domain: media_player
-
-    queue_id:
-      name: Music Assistant Queue ID
-      description: >
-        The Music Assistant internal player_id used as queue_id for
-        player_queues/play_media. Find it via the MA API's players/all
-        command — it's usually the same string as an entity_id but confirm
-        with player_queues/get, since it isn't always the same entity you'd
-        pick for playback control above.
-      selector:
-        text:
+            - integration: music_assistant
+              domain: media_player
 
     playlist_name:
       name: Playlist Name
@@ -100,16 +107,43 @@ blueprint:
       selector:
         text:
 
+    speech_enabled:
+      name: Enable Spoken Responses
+      description: >
+        Speak match confirmations, disambiguation prompts, no-match
+        apologies, and book-list summaries through the satellite's normal
+        Assist voice. Leave off if your device is affected by the ESPHome
+        TTS-crash bug described above.
+      default: false
+      selector:
+        boolean:
+
+    search_commands:
+      name: "Advanced: Search Trigger Phrasings"
+      description: >
+        Sentence patterns (Home Assistant sentence-trigger syntax) that
+        route to the matcher's search mode. The default deliberately uses
+        only "play/read/listen to" — verbs not used for other Assist
+        intents — since sentence triggers match house-wide before a
+        device condition is checked (see the blueprint description above).
+        Avoid adding verbs like "start" or "put on" here even though they
+        read naturally ("start the wimpy kid book"): they collide with
+        timer/vacuum/light intents on every Assist device, not just this
+        one, silently swallowing them into a generic "Done" instead. The
+        remaining trade-off is non-book requests like "play some music" on
+        this device specifically — replace with something like "(play|read)
+        [me] [the] {utterance} (book|story)" to require a book-ish word if
+        that comes up in your household.
+      default:
+        - "(play|read|listen to) [me] [the] {utterance}"
+      selector:
+        text:
+          multiple: true
+
 trigger:
-  # Each trigger only matches specific book/audiobook phrasings. Anything
-  # else spoken to the device is left alone — it falls through to Home
-  # Assistant's normal Assist pipeline (Nabu Casa Cloud STT/TTS + whatever
-  # conversation agent is otherwise configured) exactly as if this
-  # automation didn't exist.
   - id: search
     trigger: conversation
-    command:
-      - "(play|read|listen to|start|put on) [me] [the] {utterance}"
+    command: !input search_commands
 
   - id: resume
     trigger: conversation
@@ -139,8 +173,8 @@ trigger:
 
 variables:
   satellite_device_id: !input satellite_device
-  ha_queue_id: !input queue_id
   ha_playlist_name: !input playlist_name
+  speech_enabled: !input speech_enabled
   utterance: "{{ trigger.sentence }}"
 
 condition:
@@ -149,14 +183,13 @@ condition:
 
 action:
   - choose:
-      # ── Simple controls — no API calls needed ──────────────────
       - conditions:
           - condition: trigger
             id: control_pause
         sequence:
           - action: media_player.media_pause
             target:
-              entity_id: !input control_target
+              entity_id: !input ma_player
 
       - conditions:
           - condition: trigger
@@ -164,90 +197,44 @@ action:
         sequence:
           - action: media_player.media_next_track
             target:
-              entity_id: !input control_target
+              entity_id: !input ma_player
 
-      # ── Resume — fetch in-progress books ────────────────────────
-      - conditions:
-          - condition: trigger
-            id: resume
-        sequence:
-          - action: rest_command.ma_in_progress_audiobooks
-            response_variable: in_progress_response
+    default:
+      # search / resume / list all go through the same single call — the
+      # service classifies, looks up, matches, and phrases the response;
+      # this automation only has to act on what comes back.
+      - action: rest_command.book_assist
+        continue_on_error: true
+        data:
+          utterance: "{{ utterance }}"
+          hint: "{{ trigger.id }}"
+          playlist: "{{ ha_playlist_name }}"
+        response_variable: raw
 
-          - variables:
-              in_progress_books: >
-                {% set items = in_progress_response.content %}
-                {% if items is string %}
-                  {% set items = items | from_json %}
-                {% endif %}
-                {% set ns = namespace(books=[]) %}
-                {% for b in items %}
-                  {% set clean_title = b.name | regex_replace('\s*\(Unabridged\)', '') %}
-                  {% set ns.books = ns.books + [{"title": clean_title, "uri": b.uri}] %}
-                {% endfor %}
-                {{ ns.books | tojson }}
+      - variables:
+          res: >-
+            {% set c = raw.content if raw is defined and raw.status == 200 else none %}
+            {% if c is string %}
+              {{ c | from_json }}
+            {% elif c is not none %}
+              {{ c }}
+            {% else %}
+              {{ {"speech": "The book service is not responding.", "handled": true, "media": none} }}
+            {% endif %}
 
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ in_progress_books | from_json | length > 0 }}"
-                sequence:
-                  - action: rest_command.book_match
-                    data:
-                      utterance: "{{ utterance }}"
-                      books_json: "{{ in_progress_books }}"
-                      mode: "resume"
-                    response_variable: match_response
-
-                  - variables:
-                      match: >
-                        {% set r = match_response.content %}
-                        {% if r is string %}{{ r | from_json }}{% else %}{{ r }}{% endif %}
-
-                  - choose:
-                      - conditions:
-                          - condition: template
-                            value_template: "{{ match.error is not defined and match.disambiguation is not defined }}"
-                        sequence:
-                          - action: rest_command.ma_play_audiobook
-                            data:
-                              queue_id: "{{ ha_queue_id }}"
-                              uri: "{{ match.uri }}"
-
-      # ── List — silently no-ops for now ──────────────────────────
-      # This was purely a TTS response (the matcher's mode=list reply) and
-      # there's no audio state change to fall back on. Re-enable once TTS
-      # is safe again.
-      - conditions:
-          - condition: trigger
-            id: list
-        sequence: []
-
-      # ── Search — find and play a book ───────────────────────────
-      - conditions:
-          - condition: trigger
-            id: search
-        sequence:
-          - action: rest_command.book_match
+      - if: "{{ res.media }}"
+        then:
+          - action: music_assistant.play_media
+            target:
+              entity_id: !input ma_player
             data:
-              utterance: "{{ utterance }}"
-              playlist: "{{ ha_playlist_name }}"
-              mode: "search"
-            response_variable: match_response
+              media_id: "{{ res.media.uri }}"
+              enqueue: "{{ res.media.enqueue | default('replace') }}"
 
-          - variables:
-              match: >
-                {% set r = match_response.content %}
-                {% if r is string %}{{ r | from_json }}{% else %}{{ r }}{% endif %}
-
-          - choose:
-              - conditions:
-                  - condition: template
-                    value_template: "{{ match.error is not defined and match.disambiguation is not defined }}"
-                sequence:
-                  - action: rest_command.ma_play_audiobook
-                    data:
-                      queue_id: "{{ ha_queue_id }}"
-                      uri: "{{ match.uri }}"
+      - if: "{{ speech_enabled }}"
+        then:
+          - set_conversation_response: "{{ res.speech | default('') }}"
+        else:
+          - set_conversation_response: ""
 
 mode: single

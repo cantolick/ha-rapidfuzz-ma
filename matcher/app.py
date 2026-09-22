@@ -9,17 +9,17 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI
 from pydantic import BaseModel
-from rapidfuzz import fuzz, process
 
+import core
 import ma_client
-from catalog import SERIES_DEFAULT_TITLE, build_catalog
+import responses
+from catalog import build_catalog
 
 # playlist name -> list of MA library playlist item_ids to union (e.g. a
 # "teens" playlist that should also include everything in "kids", so new
@@ -35,26 +35,11 @@ except json.JSONDecodeError as e:
 
 FULL_LIBRARY_KEY = "__all__"  # used instead of None so the cache file (plain
 # JSON, string keys only) round-trips without special-casing
+MUSIC_CATALOG_KEY = "__music__"
 
 CACHE_PATH = Path(os.environ.get("CACHE_PATH", "/data/catalog_cache.json"))
 STARTUP_RETRY_ATTEMPTS = 3
 STARTUP_RETRY_DELAY_SECS = 5
-
-TIE_MARGIN = 4
-SCORE_CUTOFF = 55
-FILLER_WORDS = {
-    "play", "the", "a", "an", "book", "please", "can", "you", "i", "by", "narrated",
-    "want", "to", "hear", "listen", "story", "audiobook",
-    "resume", "continue", "where", "left", "off", "was", "listening", "at",
-}
-ORDINAL_WORDS = {
-    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
-    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
-    "eleventh": 11, "twelfth": 12, "thirteenth": 13, "fourteenth": 14,
-    "fifteenth": 15, "sixteenth": 16, "seventeenth": 17, "eighteenth": 18,
-    "nineteenth": 19, "twentieth": 20,
-}
-NUMBER_RE = re.compile(r"\b(\d+)\b")
 
 _catalogs: dict[str, list[dict]] = {}  # playlist name (FULL_LIBRARY_KEY = no playlist) -> catalog
 _catalogs_stale = False  # True if serving a disk-cached catalog, not a fresh MA fetch
@@ -74,6 +59,15 @@ async def _fetch_all_catalogs() -> dict:
                     raw_books.append(b)
         catalogs[name] = build_catalog(raw_books)
     catalogs[FULL_LIBRARY_KEY] = build_catalog(await ma_client.fetch_full_library())
+    try:
+        catalogs[MUSIC_CATALOG_KEY] = build_catalog(await ma_client.fetch_music_tracks())
+    except Exception as e:
+        # Optional — a server with no music providers configured, or an
+        # older MA version without this endpoint, shouldn't take down
+        # audiobook matching over it. Just means the passthrough fallback
+        # in /v1/assist has nothing to fall back to.
+        print(f"WARNING: music track fetch failed ({e}) — non-book \"play X\" "
+              f"requests will fall through to passthrough instead of a music search.")
     return catalogs
 
 
@@ -155,160 +149,155 @@ class MatchRequest(BaseModel):
     mode: str = "search"
 
 
-def confidence_label(score: float) -> str:
-    if score >= 85:
-        return "high"
-    if score >= 70:
-        return "medium"
-    return "low"
-
-
-def strip_filler(text: str) -> str:
-    words = [w for w in text.lower().split() if w not in FILLER_WORDS]
-    return " ".join(words) or text
-
-
-def normalized_text(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
-
-
-def metadata_prefilter(query: str, catalog: list[dict]) -> tuple[str, list[dict]]:
-    """Narrow candidates when the utterance names an indexed person/group."""
-    normalized_query = normalized_text(query)
-    matches = []
-    matched_values = set()
-    for entry in catalog:
-        for field in ("authors", "narrators", "collections"):
-            for value in entry.get("metadata", {}).get(field, []):
-                normalized_value = normalized_text(value)
-                if normalized_value and normalized_value in normalized_query:
-                    matches.append(entry)
-                    matched_values.add(normalized_value)
-                    break
-            if entry in matches:
-                break
-
-    if not matches:
-        return query, catalog
-
-    # Remove the matched metadata phrase before title scoring. A request such
-    # as "a book by Jeff Kinney" should rank the title words, not repeat the
-    # author's name for every candidate.
-    title_query = normalized_query
-    for value in sorted(matched_values, key=len, reverse=True):
-        title_query = re.sub(rf"\b{re.escape(value)}\b", " ", title_query)
-    title_query = " ".join(title_query.split())
-    return title_query, matches
-
-
-def extract_book_number(utterance: str) -> int | None:
-    lower = utterance.lower()
-    for word, num in ORDINAL_WORDS.items():
-        if word in lower:
-            return num
-    m = NUMBER_RE.search(lower)
-    return int(m.group(1)) if m else None
-
-
-def best_score(query: str, text: str, **_ignored) -> float:
-    # WRatio empirically misranks short-phrase-vs-long-title matches here
-    # (scored an unrelated Harry Potter title at 85 against a Wimpy Kid
-    # request that scored 51) — partial_ratio and token_set_ratio both rank
-    # correctly on the same real test data, so use the better of the two.
-    return max(
-        fuzz.partial_ratio(query, text),
-        fuzz.token_set_ratio(query, text),
-    )
+def _catalog_for(playlist: Optional[str]) -> list[dict]:
+    catalog = _catalogs.get(playlist) if playlist else None
+    if catalog is None:
+        catalog = _catalogs.get(FULL_LIBRARY_KEY, [])
+    return catalog
 
 
 @app.post("/match")
 def match(req: MatchRequest):
-    if req.books:
+    if req.books is not None:
+        if not req.books:
+            # Explicitly-empty list (e.g. "no audiobooks currently in
+            # progress") is not "books wasn't supplied" — don't silently
+            # fall through to searching the full playlist/library catalog.
+            return {"error": "no_match"}
         catalog = build_catalog([{"name": b.title, "uri": b.uri} for b in req.books])
     else:
-        catalog = _catalogs.get(req.playlist) if req.playlist else None
-        if catalog is None:
-            catalog = _catalogs.get(FULL_LIBRARY_KEY, [])
+        catalog = _catalog_for(req.playlist)
     if not catalog:
         return {"error": "no_match"}
 
-    search_texts = [c["search_text"] for c in catalog]
-
     if req.mode == "list":
-        sample = [c["title"] for c in catalog[:4]]
-        if not sample:
-            return {"response": "You don't have any audiobooks available right now."}
-        joined = ", ".join(sample[:-1]) + (
-            f", and {sample[-1]}" if len(sample) > 1 else sample[0]
-        )
-        return {"response": f"You have some great stories to choose from, like {joined}."}
+        return {"response": core.list_summary(catalog)}
 
-    query = strip_filler(req.utterance)
-    query, catalog = metadata_prefilter(query, catalog)
-    if not query:
-        if len(catalog) == 1:
-            e = catalog[0]
-            return {"uri": e["uri"], "title": e["title"], "confidence": "high"}
-        return {
-            "disambiguation": [
-                {"title": e["title"], "uri": e["uri"]} for e in catalog[:3]
-            ]
-        }
-    search_texts = [c["search_text"] for c in catalog]
-    results = process.extract(
-        query, search_texts, scorer=best_score, limit=len(search_texts), score_cutoff=SCORE_CUTOFF
-    )
-    if not results:
-        if req.mode == "resume":
-            # A bare "resume" / "continue" / "where I left off" has no title
-            # words to fuzzy-match at all — that's expected, not a failure.
-            # The candidate list here is already pre-filtered to in-progress
-            # items, so the most-recently-active one is simply the first.
-            e = catalog[0]
-            return {"uri": e["uri"], "title": e["title"], "confidence": "high"}
-        return {"error": "no_match"}
+    return core.resolve(req.utterance, catalog, mode=req.mode)
 
-    top_score = results[0][1]
-    tied = [catalog[idx] for (_text, score, idx) in results if top_score - score <= TIE_MARGIN]
 
-    if len(tied) == 1:
-        e = tied[0]
-        if confidence_label(top_score) == "low":
-            return {"error": "no_match"}
-        return {"uri": e["uri"], "title": e["title"], "confidence": confidence_label(top_score)}
+class AssistRequest(BaseModel):
+    utterance: str
+    # The HA trigger id (search/resume/list) that fired, if any — advisory
+    # only. Classification is re-derived from the utterance text below so
+    # there's one source of truth for "what kind of request is this," not
+    # one copy in the HA blueprint's trigger patterns and another here.
+    hint: Optional[str] = None
+    playlist: Optional[str] = None
+    device_id: Optional[str] = None
+    conversation_id: Optional[str] = None
+    language: str = "en"
+    max_options: int = 2
 
-    series_keys = {e["series"] for e in tied}
-    if len(series_keys) == 1 and None not in series_keys:
-        series = next(iter(series_keys))
 
-        # An explicit book number ("book 2", "the second one") wins over any
-        # default — search the WHOLE series in the catalog, not just the tied
-        # subset, since the actual target may not have scored into the tie
-        # group at all (e.g. "harry potter book 2" may score book 2 highest
-        # outright, leaving nothing else close enough to "tie" with it).
-        requested_num = extract_book_number(req.utterance)
-        if requested_num is not None:
-            numbered_match = next(
-                (c for c in catalog if c["series"] == series and c["book_number"] == requested_num),
-                None,
-            )
-            if numbered_match:
-                return {"uri": numbered_match["uri"], "title": numbered_match["title"], "confidence": "high"}
+_LIST_PHRASES = ("what books", "which books", "what audiobooks", "what do i have")
+_RESUME_PHRASES = (
+    "resume", "continue", "where i left", "where was i",
+    "was i listening", "was i reading",
+)
+# The HA trigger's "play/read/listen to ..." pattern matches any request
+# starting with those verbs, not just books (see README) — so a search that
+# comes up empty is ambiguous: a real book request that missed, or a non-book
+# request ("play Taylor Swift") that should never have landed here. Whether
+# the utterance names a book-ish noun at all is the cheapest signal for
+# telling those apart — not proof, but enough to avoid confidently telling
+# someone "I couldn't find that book" when they never asked for one.
+_BOOK_SIGNAL_WORDS = {"book", "audiobook", "story", "chapter"}
 
-        default_title = SERIES_DEFAULT_TITLE.get(series)
-        default_match = next((e for e in tied if e["title"] == default_title), None)
-        if default_match:
-            pick = default_match
-        else:
-            numbered = [e for e in tied if e["book_number"] is not None]
-            pick = min(numbered, key=lambda e: e["book_number"]) if numbered else tied[0]
-        return {"uri": pick["uri"], "title": pick["title"], "confidence": "high"}
 
+def _mentions_book(utterance: str) -> bool:
+    return bool(set(utterance.lower().split()) & _BOOK_SIGNAL_WORDS)
+
+
+def _classify_intent(utterance: str, hint: Optional[str]) -> str:
+    u = utterance.lower()
+    if any(p in u for p in _LIST_PHRASES):
+        return "list"
+    if any(p in u for p in _RESUME_PHRASES):
+        return "resume"
+    if hint in ("search", "resume", "list"):
+        return hint
+    return "search"
+
+
+def _envelope(outcome: str, speech: str, *, handled: bool = True, media: Optional[dict] = None,
+              options: Optional[list] = None, continue_conversation: bool = False,
+              debug: Optional[dict] = None) -> dict:
     return {
-        "disambiguation": [
-            {"title": e["title"], "uri": e["uri"]} for e in tied[:3]
-        ]
+        "schema": 1,
+        "outcome": outcome,
+        "handled": handled,
+        "speech": speech,
+        "media": media,
+        "options": options or [],
+        "continue_conversation": continue_conversation,
+        "debug": debug or {},
     }
+
+
+def _envelope_from_match_result(result: dict, intent: str, *, resume: bool, debug: dict) -> dict:
+    if "uri" in result:
+        speech = responses.resume(result["title"]) if resume else responses.play(result["title"])
+        media = {"uri": result["uri"], "title": result["title"], "enqueue": "replace"}
+        return _envelope("play", speech, media=media, debug={**debug, "confidence": result.get("confidence")})
+    if "disambiguation" in result:
+        titles = [d["title"] for d in result["disambiguation"]]
+        return _envelope(
+            "clarify", responses.clarify(titles),
+            options=result["disambiguation"], continue_conversation=True, debug=debug,
+        )
+    return _envelope("not_found", responses.not_found(), debug=debug)
+
+
+@app.post("/v1/assist")
+async def assist(req: AssistRequest):
+    """Single entry point for the HA blueprint: classify, look up, match, and
+    return a small TTS-ready envelope. HA still owns executing playback and
+    transport controls (pause/stop/next chapter) — this only decides *what*
+    to play or say. See README for the full response contract."""
+    intent = _classify_intent(req.utterance, req.hint)
+    debug_base = {"intent": intent, "stale": _catalogs_stale}
+
+    if intent == "list":
+        catalog = _catalog_for(req.playlist)
+        titles = [c["title"] for c in catalog[:4]]
+        return _envelope(
+            "info", responses.list_summary(titles),
+            debug={**debug_base, "catalog_size": len(catalog)},
+        )
+
+    if intent == "resume":
+        try:
+            in_progress_raw = await ma_client.fetch_in_progress_audiobooks()
+        except Exception as e:
+            return _envelope("unavailable", responses.unavailable(), debug={**debug_base, "reason": str(e)})
+        if not in_progress_raw:
+            return _envelope("not_found", responses.nothing_in_progress(), debug=debug_base)
+        catalog = build_catalog(in_progress_raw)
+        result = core.resolve(req.utterance, catalog, mode="resume")
+        return _envelope_from_match_result(
+            result, intent, resume=True, debug={**debug_base, "catalog_size": len(catalog)},
+        )
+
+    # search
+    catalog = _catalog_for(req.playlist)
+    if not catalog:
+        return _envelope("unavailable", responses.unavailable(), debug=debug_base)
+    result = core.resolve(req.utterance, catalog, mode="search")
+    debug = {**debug_base, "catalog_size": len(catalog)}
+    if result == {"error": "no_match"} and not _mentions_book(req.utterance):
+        # No match, and nothing in the phrase even suggests a book was
+        # meant — likely a non-book "play ___" request that the HA trigger
+        # over-broadly caught (e.g. "play Taylor Swift"). Try the music
+        # catalog, if one's configured, before giving up silently.
+        music_catalog = _catalogs.get(MUSIC_CATALOG_KEY)
+        if music_catalog:
+            music_result = core.resolve(req.utterance, music_catalog, mode="search")
+            music_debug = {**debug_base, "catalog_size": len(music_catalog), "catalog": "music"}
+            if music_result != {"error": "no_match"}:
+                return _envelope_from_match_result(music_result, intent, resume=False, debug=music_debug)
+        return _envelope("passthrough", "", handled=False, debug={**debug, "reason": "no book-signal word"})
+    return _envelope_from_match_result(result, intent, resume=False, debug=debug)
 
 
 @app.get("/health")
