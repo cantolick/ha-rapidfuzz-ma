@@ -222,7 +222,10 @@ action:
               {{ {"speech": "The book service is not responding.", "handled": true, "media": none} }}
             {% endif %}
 
-      - if: "{{ res.media }}"
+      # res.media is a dict, and Home Assistant template conditions cannot
+      # coerce a dict to a boolean - it evaluates false, so play_media would
+      # silently never run. `is mapping` yields a real boolean.
+      - if: "{{ res.media is mapping }}"
         then:
           - action: music_assistant.play_media
             target:
