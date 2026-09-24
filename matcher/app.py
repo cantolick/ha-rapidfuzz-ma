@@ -202,11 +202,13 @@ _RESUME_PHRASES = (
 # the utterance names a book-ish noun at all is the cheapest signal for
 # telling those apart — not proof, but enough to avoid confidently telling
 # someone "I couldn't find that book" when they never asked for one.
-_BOOK_SIGNAL_WORDS = {"book", "audiobook", "story", "chapter"}
+_BOOK_SIGNAL_WORDS = {
+    "book", "books", "audiobook", "audiobooks", "story", "stories", "chapter", "chapters",
+}
 
 
 def _mentions_book(utterance: str) -> bool:
-    return bool(set(utterance.lower().split()) & _BOOK_SIGNAL_WORDS)
+    return bool(set(core.words(utterance)) & _BOOK_SIGNAL_WORDS)
 
 
 def _classify_intent(utterance: str, hint: Optional[str]) -> str:

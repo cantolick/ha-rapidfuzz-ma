@@ -17,6 +17,7 @@ during extraction:
 from __future__ import annotations
 
 import re
+import string
 from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz, process
@@ -55,9 +56,23 @@ def confidence_label(score: float) -> str:
     return "low"
 
 
+_EDGE_PUNCTUATION = string.punctuation + "“”‘’"
+
+
+def words(text: str) -> list[str]:
+    """Lowercased whitespace tokens with punctuation trimmed off their edges.
+
+    Speech-to-text output arrives punctuated ("Play Hatchet book."), and a
+    token like "book." is neither a filler word nor a book-signal word to a
+    plain str.split(). Trimming the edges only keeps internal apostrophes and
+    hyphens ("charlotte's", "spider-man") intact.
+    """
+    return [w for w in (t.strip(_EDGE_PUNCTUATION) for t in text.lower().split()) if w]
+
+
 def strip_filler(text: str, config: MatchConfig = DEFAULT_CONFIG) -> str:
-    words = [w for w in text.lower().split() if w not in config.filler_words]
-    return " ".join(words) or text
+    kept = [w for w in words(text) if w not in config.filler_words]
+    return " ".join(kept) or text
 
 
 def normalized_text(text: str) -> str:

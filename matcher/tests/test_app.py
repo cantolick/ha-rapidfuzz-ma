@@ -106,3 +106,10 @@ def test_book_request_never_touches_music_catalog():
     result = _assist("play the wimpy kid book", hint="search", with_music=True)
     assert result["outcome"] == "play"
     assert result["media"]["title"] == "Diary of a Wimpy Kid"
+
+
+def test_punctuated_book_word_is_recognised_as_a_book_request():
+    # STT output ends with a period ("...book."); a missed match must still
+    # apologise rather than going silent as if it weren't a book request.
+    result = _assist("Play the wombat chronicles book.", hint="search")
+    assert result["outcome"] == "not_found"
