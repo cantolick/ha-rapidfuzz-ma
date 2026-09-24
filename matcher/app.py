@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
@@ -207,6 +208,14 @@ _BOOK_SIGNAL_WORDS = {
 }
 
 
+_LEADING_VERB_RE = re.compile(r"^\s*(?:please\s+)?(?:play|read|listen\s+to)(?:\s+|$)(?:me\s+)?", re.IGNORECASE)
+
+
+def _heard_phrase(utterance: str) -> str | None:
+    """The part of the request after the trigger verb, as transcribed."""
+    return _LEADING_VERB_RE.sub("", utterance).strip(" .,!?;:") or None
+
+
 def _mentions_book(utterance: str) -> bool:
     return bool(set(core.words(utterance)) & _BOOK_SIGNAL_WORDS)
 
@@ -237,7 +246,8 @@ def _envelope(outcome: str, speech: str, *, handled: bool = True, media: Optiona
     }
 
 
-def _envelope_from_match_result(result: dict, intent: str, *, resume: bool, debug: dict) -> dict:
+def _envelope_from_match_result(result: dict, intent: str, *, resume: bool, debug: dict,
+                                heard: Optional[str] = None) -> dict:
     if "uri" in result:
         speech = responses.resume(result["title"]) if resume else responses.play(result["title"])
         media = {"uri": result["uri"], "title": result["title"], "enqueue": "replace"}
@@ -248,7 +258,7 @@ def _envelope_from_match_result(result: dict, intent: str, *, resume: bool, debu
             "clarify", responses.clarify(titles),
             options=result["disambiguation"], continue_conversation=True, debug=debug,
         )
-    return _envelope("not_found", responses.not_found(), debug=debug)
+    return _envelope("not_found", responses.not_found(heard), debug=debug)
 
 
 @app.post("/v1/assist")
@@ -299,7 +309,7 @@ async def assist(req: AssistRequest):
             if music_result != {"error": "no_match"}:
                 return _envelope_from_match_result(music_result, intent, resume=False, debug=music_debug)
         return _envelope("passthrough", "", handled=False, debug={**debug, "reason": "no book-signal word"})
-    return _envelope_from_match_result(result, intent, resume=False, debug=debug)
+    return _envelope_from_match_result(result, intent, resume=False, debug=debug, heard=_heard_phrase(req.utterance))
 
 
 @app.get("/health")
