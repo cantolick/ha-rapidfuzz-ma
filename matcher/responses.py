@@ -31,7 +31,11 @@ def clarify(titles: list[str]) -> str:
     return f"I found a couple — did you mean {options[0]}, or {options[1]}?"
 
 
-def not_found() -> str:
+def not_found(heard: str | None = None) -> str:
+    # Repeating what speech-to-text actually heard lets the speaker notice
+    # a mis-transcription ("Diary Vindicate") and simply try again.
+    if heard:
+        return f'I couldn\'t find "{heard}".'
     return "I couldn't find a book called that."
 
 

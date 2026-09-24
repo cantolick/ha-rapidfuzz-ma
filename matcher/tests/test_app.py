@@ -113,3 +113,17 @@ def test_punctuated_book_word_is_recognised_as_a_book_request():
     # apologise rather than going silent as if it weren't a book request.
     result = _assist("Play the wombat chronicles book.", hint="search")
     assert result["outcome"] == "not_found"
+
+
+def test_not_found_repeats_what_was_heard():
+    # Speech-to-text mishears titles ("Diary Vindicate"); echoing the
+    # transcription lets the speaker notice and retry.
+    result = _assist("Play Diary Vindicate, book 99.", hint="search")
+    assert result["outcome"] == "not_found"
+    assert 'I couldn\'t find "Diary Vindicate, book 99".' == result["speech"]
+
+
+def test_heard_phrase_strips_only_the_leading_verb():
+    assert app._heard_phrase("Play the Hobbit.") == "the Hobbit"
+    assert app._heard_phrase("please listen to Hatchet book!") == "Hatchet book"
+    assert app._heard_phrase("play") is None
