@@ -109,3 +109,17 @@ def test_punctuated_request_with_book_word_still_matches():
 
 def test_words_keeps_internal_apostrophes_and_hyphens():
     assert core.words("Play Charlotte's Web, Spider-Man!") == ["play", "charlotte's", "web", "spider-man"]
+
+
+def test_garbled_series_name_with_a_book_number_still_finds_the_book():
+    # Found live: STT heard "Diary of a Wimpy Kid, book 16" as "Diary
+    # Vindicate, book 16." — the series word survives, the number is clear.
+    catalog = make_catalog()
+    assert core.resolve("Play Dairy Vindicate, book 2.", catalog)["title"] == "Rodrick Rules | Diary of a Wimpy Kid"
+    assert core.resolve("Play Hairy Potter, book 2.", catalog)["title"] == "Harry Potter and the Chamber of Secrets (Book 2)"
+
+
+def test_series_fallback_needs_both_a_series_word_and_a_number():
+    catalog = make_catalog()
+    assert core.resolve("Play Dairy Vindicate.", catalog) == {"error": "no_match"}
+    assert core.resolve("Play Taylor Swift, book 2.", catalog) == {"error": "no_match"}

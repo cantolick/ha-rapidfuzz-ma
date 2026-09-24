@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz, process
 
-from catalog import SERIES_DEFAULT_TITLE
+from catalog import SERIES_DEFAULT_TITLE, SERIES_MARKERS
 
 
 @dataclass(frozen=True)
@@ -140,7 +140,7 @@ def list_summary(catalog: list[dict]) -> str:
     return f"You have some great stories to choose from, like {joined}."
 
 
-def resolve(
+def _resolve_fuzzy(
     utterance: str,
     catalog: list[dict],
     *,
@@ -243,3 +243,50 @@ def resolve(
             {"title": e["title"], "uri": e["uri"]} for e in tied[:3]
         ]
     }
+
+
+_SERIES_STOPWORDS = {"of", "a", "an", "the"}
+
+
+def _series_number_fallback(utterance: str, catalog: list[dict], config: MatchConfig) -> dict | None:
+    """Recover "<garbled series name>, book N" when normal matching finds nothing.
+
+    Speech-to-text often mangles a series title ("Diary Vindicate, book 16")
+    while getting the number right. If one recognisable series word survives
+    (fuzzily — "dairy" still matches "diary") and the request names a book
+    number, that's enough to pick the numbered book in that series.
+    """
+    number = extract_book_number(utterance)
+    if number is None:
+        return None
+    query_tokens = [w for w in words(utterance) if len(w) >= 4 and w not in config.filler_words]
+    hits = set()
+    for phrase, series_key in SERIES_MARKERS.items():
+        marker_tokens = [t for t in words(phrase) if t not in _SERIES_STOPWORDS and len(t) >= 4]
+        if any(fuzz.ratio(q, m) >= 80 for q in query_tokens for m in marker_tokens):
+            hits.add(series_key)
+    if len(hits) != 1:
+        return None
+    series = next(iter(hits))
+    match = next((c for c in catalog if c["series"] == series and c["book_number"] == number), None)
+    if match is None:
+        return None
+    return {"uri": match["uri"], "title": match["title"], "confidence": "medium"}
+
+
+def resolve(
+    utterance: str,
+    catalog: list[dict],
+    *,
+    mode: str = "search",
+    config: MatchConfig = DEFAULT_CONFIG,
+) -> dict:
+    """Match an utterance against a catalog (see _resolve_fuzzy for the shapes).
+
+    Falls back to series-word + book-number recovery when fuzzy matching
+    finds nothing.
+    """
+    result = _resolve_fuzzy(utterance, catalog, mode=mode, config=config)
+    if result == {"error": "no_match"}:
+        return _series_number_fallback(utterance, catalog, config) or result
+    return result
