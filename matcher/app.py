@@ -34,6 +34,10 @@ except json.JSONDecodeError as e:
           f"playlists configured; only the full-library (no-playlist) catalog will work.")
     PLAYLIST_SOURCES = {}
 
+# Single source of truth for the release number: also tags the Docker image in CI.
+VERSION = (Path(__file__).with_name("VERSION").read_text().strip()
+           if Path(__file__).with_name("VERSION").exists() else "dev")
+
 FULL_LIBRARY_KEY = "__all__"  # used instead of None so the cache file (plain
 # JSON, string keys only) round-trips without special-casing
 MUSIC_CATALOG_KEY = "__music__"
@@ -131,7 +135,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, version=VERSION)
 
 
 class Book(BaseModel):
@@ -316,6 +320,7 @@ async def assist(req: AssistRequest):
 def health():
     return {
         "status": "ok" if _catalogs else "degraded",
+        "version": VERSION,
         "stale": _catalogs_stale,
         "catalogs": {k: len(v) for k, v in _catalogs.items()},
     }
