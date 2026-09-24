@@ -92,3 +92,20 @@ def test_metadata_prefilter_no_match_returns_full_catalog_unchanged():
     query, filtered = core.metadata_prefilter("harry potter", catalog)
     assert filtered == catalog
     assert query == "harry potter"
+
+
+def test_speech_to_text_punctuation_does_not_defeat_filler_stripping():
+    # Found live: Home Assistant's STT always ends a sentence with a period,
+    # so "Play Hatchet book." left a stray "book." in the query. Without the
+    # period the same request reduces cleanly to "hatchet".
+    assert core.strip_filler("Play Hatchet book.") == core.strip_filler("Play Hatchet book") == "hatchet"
+
+
+def test_punctuated_request_with_book_word_still_matches():
+    catalog = make_catalog()
+    for utterance in ("Play the Hobbit book.", "Play The Hobbit, book!", "play the hobbit"):
+        assert core.resolve(utterance, catalog)["title"] == "The Hobbit", utterance
+
+
+def test_words_keeps_internal_apostrophes_and_hyphens():
+    assert core.words("Play Charlotte's Web, Spider-Man!") == ["play", "charlotte's", "web", "spider-man"]
