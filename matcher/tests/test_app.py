@@ -3,6 +3,7 @@ passthrough-vs-not_found distinction, which lives in app.py rather than
 core.py since it's about how to *phrase* a no-match, not how to *find* one.
 """
 import asyncio
+from pathlib import Path
 
 import app
 import ma_client
@@ -127,3 +128,9 @@ def test_heard_phrase_strips_only_the_leading_verb():
     assert app._heard_phrase("Play the Hobbit.") == "the Hobbit"
     assert app._heard_phrase("please listen to Hatchet book!") == "Hatchet book"
     assert app._heard_phrase("play") is None
+
+
+def test_health_reports_the_release_version():
+    version_file = Path(app.__file__).with_name("VERSION")
+    assert app.health()["version"] == version_file.read_text().strip()
+    assert app.app.version == app.VERSION
